@@ -17,9 +17,15 @@ export function summarizeTrials(runs: Run[]) {
       // Nominal interval assumes independent trials; not meaningful for deterministic fixtures.
       confidence95: live ? { lower: Math.max(0, center - margin), upper: Math.min(1, center + margin), method: 'Wilson; assumes independent trials' } : null,
       failedAssertions: Object.fromEntries([...new Set(group.flatMap(run => run.assertions.map(item => item.key)))].map(key => [key, group.filter(run => run.assertions.some(item => item.key === key && !item.passed)).length])),
+      // Separates the model's own finish call from loop limits, so an exhausted turn budget never reads as a deliberate escalation.
+      stopReasons: live ? group.reduce<Record<string, number>>((counts, run) => {
+        const reason = run.metadata?.stopReason ?? 'unknown'; counts[reason] = (counts[reason] ?? 0) + 1; return counts;
+      }, {}) : null,
       modelCalls: group.reduce((sum, run) => sum + (run.metadata?.modelCalls ?? 0), 0),
       inputTokens: group.reduce((sum, run) => sum + (run.metadata?.inputTokens ?? 0), 0),
       outputTokens: group.reduce((sum, run) => sum + (run.metadata?.outputTokens ?? 0), 0),
+      textOnlyTurns: group.reduce((sum, run) => sum + (run.metadata?.textOnlyTurns ?? 0), 0),
+      truncatedTurns: group.reduce((sum, run) => sum + (run.metadata?.truncatedTurns ?? 0), 0),
     };
   });
 }

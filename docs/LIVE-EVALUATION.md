@@ -29,6 +29,19 @@ Prompt variants:
 
 Both variants receive the same tools and their descriptions. The baseline is not forced to fail. Compare observed outcomes, not an assumed result.
 
+## How a trial ends
+
+A trial ends when the model calls `finish`, or when it runs out of turns. A turn with no tool call does not end it. The harness replies with a short reminder to use a tool, and the loop continues. The same happens when a response is cut off by `--max-output-tokens`, and a complete tool call inside a truncated response still runs. Both reminders restate the tool protocol only and say nothing about retries or idempotency, so the baseline prompt stays a baseline. Every reminder costs a turn, so `--max-turns` still bounds spend.
+
+Any other unfinished response, such as a provider failure or a content filter stop, aborts the trial as an infrastructure error. It is never scored as the agent choosing to escalate.
+
+Each run records a `stopReason`:
+
+- `finish_tool`: the model reported its own outcome.
+- `turn_budget_exhausted`: the model never called `finish`. Check `textOnlyTurns` and `truncatedTurns` to see whether it was stuck talking or getting cut off.
+- `unexpected_parallel_tools`: the model returned several tool calls despite `parallel_tool_calls: false`.
+- `provider_<status>`: the provider stopped the response. Only appears in `interruptedTrial.metadata`, since the trial is aborted.
+
 ## Cost and execution bounds
 
 - Default: one trial per selected scenario, at most six model calls per trial, and 1024 output tokens per call.
@@ -40,9 +53,9 @@ Both variants receive the same tools and their descriptions. The baseline is not
 
 ## Reports
 
-JSON reports are saved in `.faultline/evaluations`. Completed runs also appear in dashboard history after it is restarted. Reports include provider/model, prompt hash, prompt variant, trial number, call count, and input/output tokens.
+JSON reports are saved in `.faultline/evaluations`. Completed runs also appear in dashboard history after it is restarted. Reports include provider/model, prompt hash, prompt variant, trial number, call count, input/output tokens, stop reason, and text-only and truncated turn counts.
 
-Results are grouped by agent version and scenario. Live-model groups include a nominal 95% Wilson interval; this assumes independent trials and does not prove general reliability. Fixture repetitions do not receive confidence intervals.
+Results are grouped by agent version and scenario. Live-model groups include a nominal 95% Wilson interval; this assumes independent trials and does not prove general reliability. They also count stop reasons, so a failed run from an exhausted turn budget can be told apart from a deliberate escalation. Fixture repetitions get neither.
 
 Infrastructure/provider failures stop the evaluation and save a partial report. Completed trial totals exclude interrupted trials; `interruptedTrial.metadata` preserves usage known before interruption. Usage for a request that failed before returning may be unavailable. Partial service traces for an interrupted live trial are not yet persisted.
 

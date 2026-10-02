@@ -17,7 +17,7 @@ export async function runAgent(scenario: Scenario, agentVersion: string, agent: 
   const request = { orderId: 'order_demo_001', amountCents: 12900 };
   const result = await agent({
     request,
-    recordModelCall: data => simulator.record('model.response', 'Model selected its next action', data),
+    recordModelCall: data => simulator.record('model.response', 'Model response received', data),
     issueRefund: input => simulator.issueRefund(input),
     wait: ms => simulator.wait(ms),
     recordRetry: (attempt, reason) => simulator.record('agent.retry', reason, { attempt }),

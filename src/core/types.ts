@@ -30,6 +30,8 @@ export interface RunMetadata {
   promptVariant?: 'baseline' | 'recovery';
   promptHash?: string;
   modelCalls?: number;
+  textOnlyTurns?: number;
+  truncatedTurns?: number;
   inputTokens?: number;
   outputTokens?: number;
   maxTurns?: number;

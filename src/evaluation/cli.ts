@@ -53,7 +53,7 @@ try {
       run.metadata = { provider: 'fixture', evaluationId, trial };
     }
     await store.save(run); runs.push(run); interruptedTrial = null;
-    console.log(`${scenario} [${trial}/${trials}] ${run.status.toUpperCase()} ${run.id}`);
+    console.log(`${scenario} [${trial}/${trials}] ${run.status.toUpperCase()}${live ? ` (${run.metadata?.stopReason ?? 'unknown'})` : ''} ${run.id}`);
   }
 } catch (error) {
   executionError = error instanceof Error ? error.message : 'Evaluation interrupted';
@@ -65,7 +65,10 @@ try {
     plannedTrials: selected.length * trials, completedTrials: runs.length, executionError: executionError ?? null,
     interruptedTrial, summary: summarizeTrials(runs), runs };
   await writeFile(`.faultline/evaluations/${evaluationId}.json`, JSON.stringify(report, null, 2));
-  console.table(report.summary.map(({ confidence95, failedAssertions, ...row }) => row));
+  console.table(report.summary.map(({ confidence95, failedAssertions, stopReasons, ...row }) => row));
+  for (const row of report.summary) if (row.stopReasons) {
+    console.log(`${row.scenario} stop reasons: ${Object.entries(row.stopReasons).map(([reason, count]) => `${reason} ${count}`).join(', ')}`);
+  }
   console.log(`Report: .faultline/evaluations/${evaluationId}.json`);
   process.exitCode = executionError || runs.some(run => run.status === 'failed') ? 1 : 0;
 }
