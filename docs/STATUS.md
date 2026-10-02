@@ -8,14 +8,14 @@
 - Job progress and a recent-queue view in the dashboard. Run history separates fixture evidence from live-model evidence.
 - OpenAI Responses function-tool adapter with input validation, bounded model calls and output, explicit model selection, prompt fingerprints, and usage metadata.
 - Repeated-trial CLI and JSON reports covering per-scenario pass rates, assertion counts, and Wilson intervals for live trials only.
-- Local PostgreSQL adapter, Compose file, and CI workflow.
+- Local PostgreSQL adapter and Compose file.
+- CI on GitHub runs the build, tests, demo, regression command, and a fixture evaluation, and passes.
 
 ## Not verified
 
 - No live model call has happened. The adapter is only tested against mocked responses. First paid run needs a local API key, a selected model, and `--accept-costs`. See LIVE-EVALUATION.md.
 - Docker, networked PostgreSQL, and parallel workers against a real PostgreSQL server are unrun. Existing concurrency tests use the embedded engine's single connection.
 - No browser or interaction QA on the dashboard.
-- CI has never run on GitHub.
 - No AWS resources exist.
 
 ## Known gaps
@@ -25,6 +25,7 @@
 - `src/billing/store.ts` and `sql/004_billing.sql` are unreferenced. The schema gets applied on migration, but nothing calls the store and nothing tests it. Either wire it into the evaluation CLI or drop it.
 - The `workflow-recovered` assertion treats escalation as a failure in every scenario. That holds for the four current faults, but a fault where escalation is the correct outcome will need a per-scenario expectation.
 - The live loop ends a trial as soon as a turn returns no tool call, which scores a text-only turn the same as a genuine escalation. Worth fixing before spending money on model calls.
+- The CI workflow pins actions/checkout@v4 and actions/setup-node@v4, which target a deprecated Node 20 runtime.
 - Authentication, tenant isolation, SQS/Fargate deployment, and outside validation are all still open.
 
 ## Running locally
