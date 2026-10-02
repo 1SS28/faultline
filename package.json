@@ -1,0 +1,45 @@
+{
+  "name": "faultline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fault injection and state-based regression tests for agent tool workflows",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "start": "tsx src/api/server.ts",
+    "demo": "tsx src/cli.ts demo",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json",
+    "check": "npm run typecheck && npm test",
+    "faultline": "tsx src/cli.ts",
+    "dev:api": "tsx watch src/api/server.ts",
+    "dev:web": "vite",
+    "build": "npm run typecheck && vite build",
+    "worker": "tsx src/jobs/main.ts",
+    "evaluate": "tsx src/evaluation/cli.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@fastify/static": "^10.1.5",
+    "fastify": "^5.12.5",
+    "lucide-react": "^1.49.0",
+    "openai": "^7.27.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  }
+}
