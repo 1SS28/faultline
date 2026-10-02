@@ -24,7 +24,6 @@
 - Live evaluations run through the CLI, separately from the fixture queue. An interrupted live trial keeps the usage metadata known at that point but loses its partial tool trace.
 - `src/billing/store.ts` and `sql/004_billing.sql` are unreferenced. The schema gets applied on migration, but nothing calls the store and nothing tests it. Either wire it into the evaluation CLI or drop it.
 - The `workflow-recovered` assertion treats escalation as a failure in every scenario. That holds for the four current faults, but a fault where escalation is the correct outcome will need a per-scenario expectation.
-- The CI workflow pins actions/checkout@v4 and actions/setup-node@v4, which target a deprecated Node 20 runtime.
 - Authentication, tenant isolation, SQS/Fargate deployment, and outside validation are all still open.
 
 ## Running locally
