@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { agents } from './agents.js';
 import { RefundSimulator } from './simulator.js';
 import type { Agent, Assertion, Run, Scenario, Strategy } from './types.js';
@@ -32,7 +31,7 @@ export async function runAgent(scenario: Scenario, agentVersion: string, agent: 
     { key: 'workflow-recovered', label: 'Recoverable scenario completes the requested refund', passed: result.status === 'completed' && simulator.refunds.length === 1 && total === request.amountCents && !!match, expected: 'One confirmed $129.00 refund', actual: `${simulator.refunds.length} refund(s), ${result.status}` },
   ];
   return {
-    id: randomUUID(), scenario, agentVersion, startedAt,
+    id: crypto.randomUUID(), scenario, agentVersion, startedAt,
     durationMs: Math.round((performance.now() - start) * 100) / 100,
     status: assertions.every(assertion => assertion.passed) ? 'passed' : 'failed',
     result, events: simulator.events, refunds: simulator.refunds, assertions,

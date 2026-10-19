@@ -13,6 +13,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run build:site
       - run: npm test
       - run: npm run demo
       - run: npm run faultline -- run timeout-after-commit resilient

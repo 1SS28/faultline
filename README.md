@@ -30,6 +30,18 @@ For hot reload, run `npm run dev` and open http://127.0.0.1:5173. That starts th
 
 Nothing in the dashboard is precomputed. Every comparison executes the simulator and persists evidence through the API, and earlier CLI runs show up in history.
 
+## Product website
+
+`site/` is the public product page. Its demo imports `src/core` and runs the real simulator in the visitor's browser, so it needs no API, database or key.
+
+```sh
+npm run dev:site
+npm run build:site
+npm run preview:site
+```
+
+`dev:site` serves on http://127.0.0.1:5174 and `build:site` writes static files to `dist/site`. To host it on Vercel, import the repository with the default settings. `vercel.json` sets the install command, build command and output folder.
+
 ## Commands
 
 ```sh
@@ -110,6 +122,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/evaluation/`: repeated trials, usage accounting, and JSON reports.
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.
+- `site/`: public product page, deployable to Vercel as static files.
 - `tests/`: behavioral, database, and API tests.
 - `docs/ROADMAP.md`: next milestones and the intended AWS architecture.
 - `docs/STATUS.md`: what works, what isn't verified, and known gaps.
