@@ -6,6 +6,7 @@
 - Durable SQL job queue: idempotent submission, row claims, leases, heartbeat renewal, bounded retries, attempt history, and stale-result fencing.
 - A fresh subprocess per fixture, real wall-clock deadlines, and graceful worker shutdown.
 - Job progress and a recent-queue view in the dashboard. Run history separates fixture evidence from live-model evidence.
+- The dashboard has been checked by hand in a browser at desktop and phone widths: all four scenarios, run history and filters, opening saved runs, evidence export, and the error shown when the API is down.
 - OpenAI Responses function-tool adapter with input validation, bounded model calls and output, explicit model selection, prompt fingerprints, and usage metadata.
 - Repeated-trial CLI and JSON reports covering per-scenario pass rates, assertion counts, and Wilson intervals for live trials only.
 - Local PostgreSQL adapter and Compose file.
@@ -15,7 +16,6 @@
 
 - No live model call has happened. The adapter is only tested against mocked responses. First paid run needs a local API key, a selected model, and `--accept-costs`. See LIVE-EVALUATION.md.
 - Docker, networked PostgreSQL, and parallel workers against a real PostgreSQL server are unrun. Existing concurrency tests use the embedded engine's single connection.
-- No browser or interaction QA on the dashboard.
 - No AWS resources exist.
 
 ## Known gaps

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Activity, ArrowDown, ArrowDownToLine, ArrowRight, Check, CheckCheck, ChevronRight, CircleAlert, Clock3, Database, FlaskConical, History, LoaderCircle, Play, RotateCcw, ShieldCheck, Terminal, X, Zap } from 'lucide-react';
 import type { Run, Scenario, Strategy, TraceEvent } from '../../src/core/types';
 import { api, type RunSummary } from './api';
@@ -31,9 +32,14 @@ export function App() {
   const [jobError, setJobError] = useState('');
   const [progress, setProgress] = useState<Job>();
   const [filter, setFilter] = useState<'all' | 'failed' | 'passed'>('all');
+  const compareRef = useRef<HTMLDivElement>(null);
   const selectedRun = runs[active];
   const scenarioDetails = scenarioInfo[scenario];
 
+  function openView(next: 'lab' | 'history') {
+    setView(next);
+    window.scrollTo(0, 0);
+  }
   async function refreshHistory() {
     setLoadingHistory(true);
     try { setHistory((await api.list()).runs); }
@@ -70,8 +76,12 @@ export function App() {
     try {
       const run = await api.get(id);
       const strategy = strategyOf(run);
-      setScenario(run.scenario); setRuns({ [strategy]: run }); setActive(strategy); setView('lab');
-      setProgress(undefined); setNotice(`Inspecting saved run ${run.id.slice(0, 8)}.`);
+      // Commit the lab view before scrolling, so the saved run's outcome is what the user lands on.
+      flushSync(() => {
+        setScenario(run.scenario); setRuns({ [strategy]: run }); setActive(strategy); setView('lab');
+        setProgress(undefined); setNotice(`Inspecting saved run ${run.id.slice(0, 8)}.`);
+      });
+      compareRef.current?.scrollIntoView({ block: 'start' });
     } catch (error) { setError(explain(error)); }
     finally { setBusy(false); }
   }
@@ -84,12 +94,12 @@ export function App() {
   return <div className="app">
     <a className="skip" href="#main">Skip to content</a>
     <aside className="sidebar">
-      <a href="#" className="brand" onClick={event => { event.preventDefault(); setView('lab'); }} aria-label="Faultline home"><span className="brand-mark"><Zap size={23} fill="currentColor" /></span>faultline<span className="version">/ 01</span></a>
+      <a href="#" className="brand" onClick={event => { event.preventDefault(); openView('lab'); }} aria-label="Faultline home"><span className="brand-mark"><Zap size={23} fill="currentColor" /></span>faultline<span className="version">/ 01</span></a>
       <div className="workspace"><span className="workspace-avatar">F</span><div><strong>Local workspace</strong><span>Development</span></div></div>
       <p className="section-label">WORKSPACE</p>
       <nav aria-label="Main navigation">
-        <button className={view === 'lab' ? 'nav-item current' : 'nav-item'} aria-current={view === 'lab' ? 'page' : undefined} onClick={() => setView('lab')}><FlaskConical size={18} />Failure lab<ChevronRight size={16} /></button>
-        <button className={view === 'history' ? 'nav-item current' : 'nav-item'} aria-current={view === 'history' ? 'page' : undefined} onClick={() => setView('history')}><History size={18} />Run history<span className="nav-count">{history.length}{history.length === 50 ? '+' : ''}</span></button>
+        <button className={view === 'lab' ? 'nav-item current' : 'nav-item'} aria-current={view === 'lab' ? 'page' : undefined} onClick={() => openView('lab')}><FlaskConical size={18} />Failure lab<ChevronRight size={16} /></button>
+        <button className={view === 'history' ? 'nav-item current' : 'nav-item'} aria-current={view === 'history' ? 'page' : undefined} onClick={() => openView('history')}><History size={18} />Run history<span className="nav-count">{history.length}{history.length === 50 ? '+' : ''}</span></button>
       </nav>
       <div className="sidebar-note"><Terminal size={19} /><strong>Evidence over assumptions.</strong><p>Assert against the service ledger, not the agent's success message.</p></div>
       <div className="sidebar-footer"><Database size={16} /><span>PostgreSQL persistence</span></div>
@@ -108,13 +118,13 @@ export function App() {
             <div className="experiment-brief"><span className="mono accent">{scenarioDetails.code}</span><h3>{scenarioDetails.name}</h3><p>{scenarioDetails.description}</p><div className="task-row"><span>Task</span><strong>Refund {money(12900)}</strong></div><div className="task-row"><span>Tool</span><code>issue_refund</code></div><button className="primary-button" disabled={busy} onClick={() => void runComparison()}>{busy ? <LoaderCircle size={17} className="spin" /> : <Play size={16} fill="currentColor" />}{busy ? 'Running comparison…' : 'Run comparison'}{!busy && <ArrowRight size={17} />}</button><small className="fixture-note">Two deterministic fixtures. No real payments.</small></div>
           </section>
           {progress && <div className="job-progress" role="status"><span className={`job-badge ${progress.status}`}>{progress.status === 'running' || progress.status === 'queued' ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />}{progress.status}</span><span>{names[progress.strategy]} <code>{progress.id.slice(0, 8)}</code></span><span>Attempt {progress.attempts}/{progress.maxAttempts}</span></div>}
-          <div className="section-heading"><div className="panel-kicker"><span className="step">02</span><h2>Compare the outcome</h2></div><button className="text-button" disabled={!Object.keys(runs).length || busy} onClick={exportReport}><ArrowDownToLine size={16} />Export evidence</button></div>
+          <div className="section-heading" ref={compareRef}><div className="panel-kicker"><span className="step">02</span><h2>Compare the outcome</h2></div><button className="text-button" disabled={!Object.keys(runs).length || busy} onClick={exportReport}><ArrowDownToLine size={16} />Export evidence</button></div>
           <section className="comparison-grid" aria-label="Agent comparison">{(['naive', 'resilient'] as Strategy[]).map(strategy => <Outcome key={strategy} strategy={strategy} run={runs[strategy]} selected={active === strategy} onSelect={() => setActive(strategy)} />)}</section>
           {selectedRun ? <section className="evidence-grid" aria-label="Execution evidence"><Trace run={selectedRun} /><Ledger run={selectedRun} /></section> : <section className="empty-evidence"><Activity size={30} /><div><h3>{busy ? 'Collecting execution evidence' : 'The next retry tells the story.'}</h3><p>{Object.keys(runs).length ? 'Select the completed agent to inspect its trace.' : 'Run a comparison to see tool calls, injected faults, and what actually changed.'}</p></div></section>}
           <footer className="lab-footer"><ShieldCheck size={16} /><span>Simulated services · isolated ledger per run · state-based assertions</span></footer>
         </> : <section className="history-panel" aria-label="Saved runs"><div className="history-controls"><div className="filter-group" aria-label="Filter by result">{(['all', 'failed', 'passed'] as const).map(value => <button key={value} aria-pressed={filter === value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{value === 'all' ? 'All runs' : value === 'failed' ? 'Failed' : 'Passed'}</button>)}</div><button className="text-button" disabled={loadingHistory || busy} onClick={() => void refreshHistory()}><RotateCcw size={16} className={loadingHistory ? 'spin' : ''} />Refresh</button></div>
           <div className="queue-section"><div className="queue-heading"><h2>Execution queue</h2><span>Recent jobs · updates every 2s</span></div>{jobError ? <p className="queue-empty" role="status">{jobError}</p> : jobs.length ? <ul>{jobs.slice(0, 6).map(job => <li key={job.id}><div><strong>{names[job.strategy]}</strong><span>{scenarioInfo[job.scenario].name}</span></div><span className={`job-badge ${job.status}`}>{job.status}</span><span className="attempt-count">{job.attempts}/{job.maxAttempts} attempts</span>{job.runId ? <button className="text-button" disabled={busy} onClick={() => void inspectRun(job.runId!)}>Inspect<ArrowRight size={14} /></button> : <code>{job.id.slice(0, 8)}</code>}{job.error && <p className="job-error">{job.error}</p>}</li>)}</ul> : <p className="queue-empty">No queued executions yet. Start a comparison in the lab.</p>}</div>
-          {loadingHistory ? <div className="history-empty">Loading saved runs…</div> : history.filter(run => filter === 'all' || run.status === filter).length ? <div className="table-scroll"><table className="history-table"><thead><tr><th>Run / agent</th><th>Scenario</th><th>Result</th><th>Started</th><th><span className="sr-only">Inspect</span></th></tr></thead><tbody>{history.filter(run => filter === 'all' || run.status === filter).map(run => <tr key={run.id}><td><strong>{agentName(run)}</strong><code>{run.id.slice(0, 8)}</code></td><td>{scenarioInfo[run.scenario]?.name ?? run.scenario}</td><td><Status status={run.status} /></td><td className="date">{new Date(run.startedAt).toLocaleString()}</td><td><button className="inspect-button" disabled={busy} onClick={() => void inspectRun(run.id)} aria-label={`Inspect run ${run.id.slice(0, 8)}`}>Inspect<ArrowRight size={15} /></button></td></tr>)}</tbody></table></div> : <div className="history-empty"><History size={28} /><h3>No {filter === 'all' ? '' : filter + ' '}runs yet.</h3><p>Run a comparison in the failure lab to save your first evidence.</p><button className="text-button" onClick={() => setView('lab')}>Open failure lab<ArrowRight size={16} /></button></div>}
+          {loadingHistory ? <div className="history-empty">Loading saved runs…</div> : history.filter(run => filter === 'all' || run.status === filter).length ? <div className="table-scroll"><table className="history-table"><thead><tr><th>Run / agent</th><th>Scenario</th><th>Result</th><th>Started</th><th><span className="sr-only">Inspect</span></th></tr></thead><tbody>{history.filter(run => filter === 'all' || run.status === filter).map(run => <tr key={run.id}><td><strong>{agentName(run)}</strong><code>{run.id.slice(0, 8)}</code></td><td>{scenarioInfo[run.scenario]?.name ?? run.scenario}</td><td><Status status={run.status} /></td><td className="date">{new Date(run.startedAt).toLocaleString()}</td><td><button className="inspect-button" disabled={busy} onClick={() => void inspectRun(run.id)} aria-label={`Inspect run ${run.id.slice(0, 8)}`}>Inspect<ArrowRight size={15} /></button></td></tr>)}</tbody></table></div> : <div className="history-empty"><History size={28} /><h3>No {filter === 'all' ? '' : filter + ' '}runs yet.</h3><p>Run a comparison in the failure lab to save your first evidence.</p><button className="text-button" onClick={() => openView('lab')}>Open failure lab<ArrowRight size={16} /></button></div>}
           <p className="history-caption">Showing the latest 50 runs. Agent labels distinguish fixtures from live model evaluations.</p>
         </section>}
       </main>
