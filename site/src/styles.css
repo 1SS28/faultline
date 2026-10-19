@@ -12,7 +12,8 @@
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 76px; }
-body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1.0625rem/1.6 var(--body); -webkit-font-smoothing: antialiased; }
+/* Decorative rotations and the stamp's entrance can poke past the viewport; clip (unlike hidden) keeps the sticky header working. */
+body { overflow-x: clip; margin: 0; background: var(--paper); color: var(--ink); font: 400 1.0625rem/1.6 var(--body); -webkit-font-smoothing: antialiased; }
 h1, h2, h3, p, ol, ul, dl, dd, figure { margin: 0; }
 ol, ul { padding: 0; list-style: none; }
 h1, h2, h3 { text-wrap: balance; }
@@ -70,7 +71,7 @@ noscript { display: block; padding: 40px 24px; text-align: center; }
 .stamp { position: absolute; right: 18px; top: 62px; font: 800 1.5rem/1 var(--display); font-stretch: 75%; text-transform: uppercase; letter-spacing: .06em; color: var(--red); border: 3.5px solid var(--red); border-radius: 8px; padding: 6px 12px 5px; transform: rotate(-12deg); mix-blend-mode: multiply; opacity: .92; animation: stamp .42s cubic-bezier(.2, .9, .3, 1.25) .85s both; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 @keyframes print { from { opacity: 0; transform: rotate(2deg) translateY(-18px); } }
-@keyframes stamp { from { opacity: 0; transform: rotate(-12deg) scale(1.9); } }
+@keyframes stamp { from { opacity: 0; transform: rotate(-12deg) scale(1.5); } }
 @media (max-width: 900px) { .evidence { max-width: 460px; } .receipt-wrap { width: min(90%, 340px); margin-right: 3%; } }
 
 /* Live demo chamber */

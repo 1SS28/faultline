@@ -53,16 +53,17 @@ export function App({ initial }: { initial?: Pair }) {
               <li>Checks based on what the service actually recorded</li>
               <li>A dashboard to compare agents run by run</li>
               <li>A command you can add to your CI pipeline</li>
-              <li>An adapter for testing OpenAI models</li>
+              <li>Adapters for testing Claude and OpenAI models</li>
+              <li>A library that adds the same faults to your own agent's tools</li>
             </ul>
           </div>
           <div className="sheet">
             <h3 className="sheet-tab">Not yet</h3>
             <ul className="checklist">
               <li>Tested against a live AI model</li>
-              <li>Tasks other than refunds</li>
+              <li>Used by a team outside the project</li>
               <li>Faults in real network traffic</li>
-              <li>Model providers other than OpenAI</li>
+              <li>Published as a package you can install</li>
               <li>A hosted version, or safe running of code you don't trust</li>
             </ul>
           </div>

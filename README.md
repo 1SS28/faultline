@@ -2,7 +2,7 @@
 
 Crash tests for AI agent tool workflows. Inject a failure, inspect the actual side effects, and turn the failure into a repeatable regression test.
 
-Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. Nothing is deployed to AWS.
+Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. A small SDK adds the same faults to your own agent's tools. Nothing is deployed to AWS.
 
 ## Run the demo
 
@@ -98,9 +98,11 @@ The Compose service is for local development only. The container and server-Post
 
 `sql/001_initial.sql` defines normalized runs, events, assertions, and refund evidence, with foreign keys, indexes, and a unique constraint on each run's idempotency keys. Saving a run is atomic. `src/db/store.ts` holds the parameterized queries and the pass-rate aggregation.
 
-## Adapting an agent
+## Testing your own agent
 
-`runAgent(scenario, agentVersion, agent)` takes a trusted TypeScript callback. Route the agent's refund tool through `context.issueRefund` and its waits through `context.wait`, then return `{status: 'completed', refundId}` or `{status: 'escalated'}`. See `src/core/agents.ts` for examples.
+To test an agent you already have, wrap the tool functions it calls with `src/sdk` and check your own service's records afterwards. See `docs/SDK.md`.
+
+To run a custom agent against the built-in refund scenarios instead, `runAgent(scenario, agentVersion, agent)` takes a trusted TypeScript callback. Route the agent's refund tool through `context.issueRefund` and its waits through `context.wait`, then return `{status: 'completed', refundId}` or `{status: 'escalated'}`. See `src/core/agents.ts` for examples.
 
 The callback runs in this process. It gets no execution sandbox and no wall-clock timeout, so don't point it at untrusted uploaded code. The simulator has a tool-call budget but can't stop an infinite loop inside adapter code. The HTTP API exposes only the two built-in fixtures.
 
@@ -119,6 +121,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/api/`: local REST API.
 - `src/jobs/`: durable SQL queue, lease management, and subprocess worker.
 - `src/agents/`: Claude and OpenAI adapters, sharing one prompt and tool set.
+- `src/sdk/`: fault injection for your own agent's tools.
 - `src/evaluation/`: repeated trials, usage accounting, and JSON reports.
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.
