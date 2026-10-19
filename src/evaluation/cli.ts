@@ -1,8 +1,9 @@
 import { parseArgs } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { scenarios, strategies, type Run, type RunMetadata, type Scenario, type Strategy } from '../core/types.js';
+import { scenarios, strategies, type Agent, type Run, type RunMetadata, type Scenario, type Strategy } from '../core/types.js';
 import { runAgent, runScenario } from '../core/runner.js';
+import { anthropicTransport, createClaudeAgent } from '../agents/anthropic.js';
 import { createOpenAIAgent, openAITransport } from '../agents/openai.js';
 import { connectDatabase } from '../db/database.js';
 import { RunStore } from '../db/store.js';
@@ -12,25 +13,38 @@ const { values } = parseArgs({ options: {
   provider: { type: 'string', default: 'fixture' }, scenario: { type: 'string', default: 'all' },
   agent: { type: 'string', default: 'resilient' }, prompt: { type: 'string', default: 'recovery' },
   model: { type: 'string' }, trials: { type: 'string', default: '1' },
-  'max-turns': { type: 'string', default: '6' }, 'max-output-tokens': { type: 'string', default: '1024' },
+  'max-turns': { type: 'string', default: '6' }, 'max-output-tokens': { type: 'string' },
   'accept-costs': { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
 } });
 if (values.help) {
-  console.log('Faultline evaluation\n  npm run evaluate -- --provider fixture --agent resilient --trials 3\n  npm run evaluate -- --provider openai --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs\n\nLive calls require OPENAI_API_KEY and explicit --accept-costs. --prompt baseline|recovery.\nLimits: 1-20 trials per scenario; --max-turns 1-12; --max-output-tokens 128-4096 per call.');
+  console.log('Faultline evaluation\n  npm run evaluate -- --provider fixture --agent resilient --trials 3\n  npm run evaluate -- --provider anthropic --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs\n  npm run evaluate -- --provider openai --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs\n\nLive calls need ANTHROPIC_API_KEY or OPENAI_API_KEY and explicit --accept-costs. --prompt baseline|recovery.\nLimits: 1-20 trials per scenario; --max-turns 1-12; --max-output-tokens 128-16000 per call (default 4096 for anthropic, 1024 for openai).');
   process.exit(0);
 }
-const trials = Number(values.trials), maxTurns = Number(values['max-turns']), maxOutputTokens = Number(values['max-output-tokens']);
-if (!['fixture', 'openai'].includes(values.provider!)) throw new Error('Provider must be fixture or openai');
+const trials = Number(values.trials), maxTurns = Number(values['max-turns']);
+const maxOutputTokens = values['max-output-tokens'] === undefined ? undefined : Number(values['max-output-tokens']);
+const credentials = { openai: { key: 'OPENAI_API_KEY', model: 'OPENAI_MODEL' }, anthropic: { key: 'ANTHROPIC_API_KEY', model: 'ANTHROPIC_MODEL' } } as const;
+if (!['fixture', 'openai', 'anthropic'].includes(values.provider!)) throw new Error('Provider must be fixture, anthropic or openai');
 if (!strategies.includes(values.agent as Strategy)) throw new Error('Agent must be naive or resilient');
 if (!['baseline', 'recovery'].includes(values.prompt!)) throw new Error('Prompt must be baseline or recovery');
 if (!Number.isInteger(trials) || trials < 1 || trials > 20) throw new Error('Trials must be 1-20');
 if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 12) throw new Error('max-turns must be 1-12');
-if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 128 || maxOutputTokens > 4096) throw new Error('max-output-tokens must be 128-4096');
+if (maxOutputTokens !== undefined && (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 128 || maxOutputTokens > 16_000)) throw new Error('max-output-tokens must be 128-16000');
 if (values.scenario !== 'all' && !scenarios.includes(values.scenario as Scenario)) throw new Error('Unknown scenario');
-const live = values.provider === 'openai';
-const model = values.model ?? process.env.OPENAI_MODEL;
-if (live && (!values['accept-costs'] || !process.env.OPENAI_API_KEY || !model)) throw new Error('Live evaluation requires OPENAI_API_KEY, an explicit model, and --accept-costs. No model request was sent.');
-const transport = live ? openAITransport(process.env.OPENAI_API_KEY!) : undefined;
+const live = values.provider !== 'fixture';
+const env = live ? credentials[values.provider as keyof typeof credentials] : undefined;
+const model = values.model ?? (env && process.env[env.model]);
+const apiKey = env && process.env[env.key];
+if (env && (!values['accept-costs'] || !apiKey || !model)) throw new Error(`Live evaluation requires ${env.key}, an explicit model, and --accept-costs. No model request was sent.`);
+const promptVariant = values.prompt as 'baseline' | 'recovery';
+// Each trial gets a fresh adapter; the transport (and its HTTP client) is shared.
+let newAdapter: (() => { agent: Agent; metadata: RunMetadata }) | undefined;
+if (values.provider === 'openai') {
+  const transport = openAITransport(apiKey!);
+  newAdapter = () => createOpenAIAgent({ model: model!, promptVariant, transport, maxTurns, maxOutputTokens });
+} else if (values.provider === 'anthropic') {
+  const transport = anthropicTransport(apiKey!);
+  newAdapter = () => createClaudeAgent({ model: model!, promptVariant, transport, maxTurns, maxOutputTokens });
+}
 const selected = values.scenario === 'all' ? scenarios : [values.scenario as Scenario];
 const evaluationId = randomUUID();
 const db = await connectDatabase({ url: process.env.DATABASE_URL, directory: process.env.FAULTLINE_DATA_DIR });
@@ -43,10 +57,10 @@ try {
   console.log(`${values.provider} evaluation: ${selected.length * trials} trial(s), at most ${live ? selected.length * trials * maxTurns : 0} model calls.`);
   for (const scenario of selected) for (let trial = 1; trial <= trials; trial++) {
     let run: Run;
-    if (transport) {
-      const adapter = createOpenAIAgent({ model: model!, promptVariant: values.prompt as 'baseline' | 'recovery', transport, maxTurns, maxOutputTokens });
+    if (newAdapter) {
+      const adapter = newAdapter();
       interruptedTrial = { scenario, trial, metadata: adapter.metadata };
-      run = await runAgent(scenario, `openai/${model}/${values.prompt}`, adapter.agent);
+      run = await runAgent(scenario, `${values.provider}/${model}/${values.prompt}`, adapter.agent);
       run.metadata = { ...adapter.metadata, evaluationId, trial };
     } else {
       run = await runScenario({ scenario, strategy: values.agent as Strategy });

@@ -25,6 +25,7 @@
     "evaluate": "tsx src/evaluation/cli.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@electric-sql/pglite": "^0.5.8",
     "@fastify/static": "^10.1.5",
     "fastify": "^5.12.5",

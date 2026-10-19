@@ -15,7 +15,8 @@ const scenarioOrder: Scenario[] = ['timeout-after-commit', 'rate-limit', 'malfor
 const money = (cents: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 const strategyOf = (run: Pick<Run, 'agentVersion' | 'metadata'>): Strategy => run.agentVersion.includes('/resilient/') || run.metadata?.promptVariant === 'recovery' ? 'resilient' : 'naive';
 const names: Record<Strategy, string> = { naive: 'Naive agent', resilient: 'Resilient agent' };
-const agentName = (run: Pick<Run, 'agentVersion' | 'metadata'>) => run.metadata?.provider === 'openai' ? `${run.metadata.model ?? 'OpenAI'} · ${run.metadata.promptVariant ?? 'custom'}` : names[strategyOf(run)];
+const isLive = (run: Pick<Run, 'metadata'>) => run.metadata?.provider !== undefined && run.metadata.provider !== 'fixture';
+const agentName = (run: Pick<Run, 'agentVersion' | 'metadata'>) => isLive(run) ? `${run.metadata!.model ?? run.metadata!.provider} · ${run.metadata!.promptVariant ?? 'custom'}` : names[strategyOf(run)];
 const explain = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Try again.';
 
 export function App() {
@@ -86,7 +87,7 @@ export function App() {
     finally { setBusy(false); }
   }
   function exportReport() {
-    const report = { fixture: Object.values(runs).every(run => run.metadata?.provider !== 'openai'), exportedAt: new Date().toISOString(), runs: Object.values(runs) };
+    const report = { fixture: Object.values(runs).every(run => !isLive(run)), exportedAt: new Date().toISOString(), runs: Object.values(runs) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `faultline-${scenario}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -105,7 +106,7 @@ export function App() {
       <div className="sidebar-footer"><Database size={16} /><span>PostgreSQL persistence</span></div>
     </aside>
     <div className="shell">
-      <header className="topbar"><div className="breadcrumbs">Workspace <ChevronRight size={14} /><span>{view === 'lab' ? 'Failure lab' : 'Run history'}</span></div><span className="environment"><span />{Object.values(runs).some(run => run.metadata?.provider === 'openai') ? 'LOCAL · MODEL EVIDENCE' : 'LOCAL · FIXTURE MODE'}</span></header>
+      <header className="topbar"><div className="breadcrumbs">Workspace <ChevronRight size={14} /><span>{view === 'lab' ? 'Failure lab' : 'Run history'}</span></div><span className="environment"><span />{Object.values(runs).some(run => isLive(run)) ? 'LOCAL · MODEL EVIDENCE' : 'LOCAL · FIXTURE MODE'}</span></header>
       <main id="main">
         <div className="page-heading"><div><p className="eyebrow">AGENT RELIABILITY / {view === 'lab' ? 'EXPERIMENTS' : 'EVIDENCE'}</p><h1>{view === 'lab' ? 'Failure lab' : 'Run history'}</h1><p>{view === 'lab' ? 'Break the tool. See what the agent does next.' : 'Every execution, its outcome, and the evidence behind it.'}</p></div><span className="build-tag">PREVIEW 0.1</span></div>
         {error && <div className="error-banner" role="alert"><CircleAlert size={18} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}><X size={17} /></button></div>}
@@ -138,7 +139,7 @@ function Status({ status }: { status: Run['status'] }) {
 function Outcome({ strategy, run, selected, onSelect }: { strategy: Strategy; run?: Run; selected: boolean; onSelect: () => void }) {
   const total = run?.refunds.reduce((sum, refund) => sum + refund.amountCents, 0);
   return <article className={`outcome ${run?.status ?? 'pending'} ${selected && run ? 'selected' : ''}`}>
-    <div className="outcome-header"><div><span className="agent-icon">{strategy === 'naive' ? <RotateCcw size={19} /> : <ShieldCheck size={19} />}</span><h3>{run ? agentName(run) : names[strategy]}<span>{run?.metadata?.provider === 'openai' ? 'Live model · simulated tools' : strategy === 'naive' ? 'Unprotected retries' : 'Idempotent retries + validation'}</span></h3></div>{run ? <Status status={run.status} /> : <span className="pending-label">Awaiting run</span>}</div>
+    <div className="outcome-header"><div><span className="agent-icon">{strategy === 'naive' ? <RotateCcw size={19} /> : <ShieldCheck size={19} />}</span><h3>{run ? agentName(run) : names[strategy]}<span>{(run !== undefined && isLive(run)) ? 'Live model · simulated tools' : strategy === 'naive' ? 'Unprotected retries' : 'Idempotent retries + validation'}</span></h3></div>{run ? <Status status={run.status} /> : <span className="pending-label">Awaiting run</span>}</div>
     <div className="outcome-metrics"><div><span>Total refunded</span><strong>{total === undefined ? '—' : money(total)}</strong></div><div><span>Ledger entries</span><strong>{run ? String(run.refunds.length).padStart(2, '0') : '—'}</strong></div><div><span>Checks passed</span><strong>{run ? `${run.assertions.filter(item => item.passed).length}/${run.assertions.length}` : '—'}</strong></div></div>
     <div className="outcome-bottom"><span>{run ? (run.status === 'passed' ? 'All assertions satisfied' : `${run.assertions.filter(item => !item.passed).length} assertion${run.assertions.filter(item => !item.passed).length === 1 ? '' : 's'} failed`) : 'Run the experiment to collect evidence'}</span><button disabled={!run} onClick={onSelect} aria-pressed={selected && !!run}>{selected && run ? 'Viewing trace' : 'Inspect trace'}<ArrowDown size={14} /></button></div>
   </article>;

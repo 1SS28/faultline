@@ -7,6 +7,10 @@ export class ToolFailure extends Error {
   }
 }
 
+export class ToolBudgetExhausted extends Error {
+  constructor() { super('Tool-call budget exhausted'); this.name = 'ToolBudgetExhausted'; }
+}
+
 /** In-memory service state belongs to exactly one run. It never calls a payment provider. */
 export class RefundSimulator {
   readonly events: TraceEvent[] = [];
@@ -28,7 +32,7 @@ export class RefundSimulator {
   async issueRefund(request: RefundRequest): Promise<unknown> {
     this.calls++;
     this.record('tool.request', 'issue_refund requested', { ...request, attempt: this.calls });
-    if (this.calls > this.maxCalls) throw new Error('Tool-call budget exhausted');
+    if (this.calls > this.maxCalls) throw new ToolBudgetExhausted();
     if (!request.orderId || !Number.isSafeInteger(request.amountCents) || request.amountCents <= 0) {
       throw new Error('Invalid refund request');
     }

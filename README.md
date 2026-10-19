@@ -2,7 +2,7 @@
 
 Crash tests for AI agent tool workflows. Inject a failure, inspect the actual side effects, and turn the failure into a repeatable regression test.
 
-Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. An OpenAI adapter is available through the evaluation CLI, with explicit model selection and cost opt-in. Nothing is deployed to AWS.
+Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. Nothing is deployed to AWS.
 
 ## Run the demo
 
@@ -110,7 +110,7 @@ Assertions inspect the ledger independently of whatever the agent claims. They c
 
 Simulation time is virtual: a 1000ms retry delay advances the test clock without sleeping, while `durationMs` records real execution time. The simulator's idempotency behavior assumes the underlying service honors keys with matching semantics, since a client key alone can't make an arbitrary provider idempotent.
 
-These tests establish behavior for the supplied fixtures and failure model, not a general guarantee of agent reliability. The OpenAI adapter and repeated-trial CLI work against mocked responses but haven't been verified with paid model calls yet. Arbitrary HTTP fault injection, container isolation, and hosted authentication are still open. See `docs/LIVE-EVALUATION.md`.
+These tests establish behavior for the supplied fixtures and failure model, not a general guarantee of agent reliability. The Claude and OpenAI adapters and the repeated-trial CLI work against simulated responses but haven't been verified with paid model calls yet. Arbitrary HTTP fault injection, container isolation, and hosted authentication are still open. See `docs/LIVE-EVALUATION.md`.
 
 ## Project map
 
@@ -118,7 +118,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/db/`: embedded and server database adapters, plus transactional persistence.
 - `src/api/`: local REST API.
 - `src/jobs/`: durable SQL queue, lease management, and subprocess worker.
-- `src/agents/`: OpenAI Responses function-tool adapter.
+- `src/agents/`: Claude and OpenAI adapters, sharing one prompt and tool set.
 - `src/evaluation/`: repeated trials, usage accounting, and JSON reports.
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.

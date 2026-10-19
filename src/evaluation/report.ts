@@ -10,7 +10,7 @@ export function summarizeTrials(runs: Run[]) {
     const p = passed / count, z = 1.96, divisor = 1 + z * z / count;
     const center = (p + z * z / (2 * count)) / divisor;
     const margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * count)) / count) / divisor;
-    const live = group.every(run => run.metadata?.provider === 'openai');
+    const live = group.every(run => run.metadata?.provider !== undefined && run.metadata.provider !== 'fixture');
     return {
       agentVersion: group[0]!.agentVersion, scenario: group[0]!.scenario, trials: count, passed,
       passRate: Math.round(p * 10000) / 100,

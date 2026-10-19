@@ -25,7 +25,7 @@ export type Agent = (context: AgentContext) => Promise<AgentResult>;
 export interface RunMetadata {
   billingMode?: 'fixture' | 'byok' | 'included';
   billingSimulation?: boolean;
-  provider: 'fixture' | 'openai';
+  provider: 'fixture' | 'openai' | 'anthropic';
   model?: string;
   promptVariant?: 'baseline' | 'recovery';
   promptHash?: string;

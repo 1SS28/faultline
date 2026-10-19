@@ -143,3 +143,12 @@ test('live summaries break out stop reasons so an exhausted budget is not read a
   const fixture = summarizeTrials([await runScenario({ scenario: 'baseline', strategy: 'resilient' })])[0]!;
   assert.equal(fixture.stopReasons, null);
 });
+test('an OpenAI agent that keeps calling a spent tool stops at the tool budget, not the turn budget', async () => {
+  const unkeyed = { orderId: 'order_demo_001', amountCents: 12900, idempotencyKey: null };
+  const adapter = createOpenAIAgent({ model: 'test-model', promptVariant: 'baseline', maxTurns: 12,
+    transport: scripted([1, 2, 3, 4, 5, 6].map(() => ['issue_refund', unkeyed] as [string, object])) });
+  const run = await runAgent('baseline', 'test-agent', adapter.agent);
+  assert.equal(adapter.metadata.stopReason, 'tool_budget_exhausted');
+  assert.equal(adapter.metadata.modelCalls, 6);
+  assert.equal(run.refunds.length, 5);
+});
