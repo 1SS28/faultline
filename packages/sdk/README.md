@@ -1,8 +1,12 @@
-# Testing your own agent
+# Faultline SDK
 
-`src/sdk` adds Faultline's faults to the tools your own agent calls. Wrap a tool function, run your agent, then check what your service actually recorded.
+Adds Faultline's faults to the tools your own AI agent calls. Wrap a tool function, run your agent, then check what your service actually recorded.
 
-It isn't published as a package yet. During the preview, import it from this repository.
+```sh
+npm install --save-dev faultline-sdk
+```
+
+It has no dependencies and runs on Node.js 18 or newer. Until it's published, build it with `npm run build:sdk` from the repository root, or import `packages/sdk/src/index.ts` directly.
 
 ## Example
 
@@ -10,7 +14,7 @@ An agent sends a reminder email and retries when the call fails. The test makes 
 
 ```ts
 import assert from 'node:assert/strict';
-import { createLab, faults, formatResult } from '../src/sdk/index.js';
+import { createLab, faults, formatResult } from 'faultline-sdk';
 
 test('a lost reply does not send the customer two emails', async () => {
   const service = emailService();            // your test double or staging client
@@ -39,7 +43,7 @@ FAILED
   ✗ Customer gets exactly one email: 2 (expected 1)
 ```
 
-`tests/sdk.test.ts` contains this example in full, with a version of the agent that passes.
+The repository's `tests/sdk.test.ts` contains this example in full, with a version of the agent that passes.
 
 ## Faults
 
@@ -75,3 +79,7 @@ For an agent built on a model's tool use, wrap the functions your tool executor 
 - The faults run inside your test process. Network traffic isn't intercepted, so the wrapped function must be safe to call, like a test double or a staging client.
 - Results don't appear in the Faultline dashboard yet.
 - No team outside this project has used it yet.
+
+## License
+
+Apache License, Version 2.0. See `LICENSE` and `NOTICE`.

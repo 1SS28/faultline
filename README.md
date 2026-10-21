@@ -100,7 +100,7 @@ The Compose service is for local development only. The container and server-Post
 
 ## Testing your own agent
 
-To test an agent you already have, wrap the tool functions it calls with `src/sdk` and check your own service's records afterwards. See `docs/SDK.md`.
+To test an agent you already have, wrap the tool functions it calls with the SDK in `packages/sdk` and check your own service's records afterwards. See `packages/sdk/README.md`.
 
 To run a custom agent against the built-in refund scenarios instead, `runAgent(scenario, agentVersion, agent)` takes a trusted TypeScript callback. Route the agent's refund tool through `context.issueRefund` and its waits through `context.wait`, then return `{status: 'completed', refundId}` or `{status: 'escalated'}`. See `src/core/agents.ts` for examples.
 
@@ -121,7 +121,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/api/`: local REST API.
 - `src/jobs/`: durable SQL queue, lease management, and subprocess worker.
 - `src/agents/`: Claude and OpenAI adapters, sharing one prompt and tool set.
-- `src/sdk/`: fault injection for your own agent's tools.
+- `packages/sdk/`: fault injection for your own agent's tools, packaged as `faultline-sdk` under Apache-2.0.
 - `src/evaluation/`: repeated trials, usage accounting, and JSON reports.
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.
@@ -129,3 +129,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `tests/`: behavioral, database, and API tests.
 - `docs/ROADMAP.md`: next milestones and the intended AWS architecture.
 - `docs/STATUS.md`: what works, what isn't verified, and known gaps.
+
+## License
+
+Faultline is proprietary; see `LICENSE`. The SDK in `packages/sdk` is licensed under the Apache License, Version 2.0.

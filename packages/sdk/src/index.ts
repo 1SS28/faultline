@@ -1,12 +1,27 @@
-import { ToolFailure } from '../core/simulator.js';
-import type { Assertion, TraceEvent } from '../core/types.js';
-
-export { ToolFailure } from '../core/simulator.js';
-
 /**
+ * Faultline SDK. Licensed under the Apache License, Version 2.0; see LICENSE.
+ *
  * Fault injection for your own agent's tools. Wrap the functions your agent calls with `lab.tool`,
- * run the agent, then record checks against your service's own state. See docs/SDK.md.
+ * run the agent, then record checks against your service's own state. See README.md.
  */
+
+/** The error a fault throws unless you configure your own. `retryAfterMs` is set on rate limits. */
+export class ToolFailure extends Error {
+  constructor(public readonly code: 'TIMEOUT' | 'RATE_LIMIT', message: string, public readonly retryAfterMs = 0) {
+    super(message);
+    this.name = 'ToolFailure';
+  }
+}
+
+export interface LabEvent {
+  sequence: number;
+  timeMs: number;
+  kind: 'tool.request' | 'tool.commit' | 'tool.response' | 'fault.injected' | 'agent.wait';
+  message: string;
+  data: Record<string, unknown>;
+}
+export interface Check { key: string; label: string; passed: boolean; expected: string; actual: string }
+
 export interface Clock { now(): number; sleep(ms: number): Promise<void> }
 
 /** Simulated time: waits advance the clock instantly, so a test with a one-second backoff runs in microseconds. */
@@ -35,7 +50,7 @@ export const faults = {
   malformedResponse: (options: When & { replaceWith?: (result: unknown) => unknown } = {}): Fault => ({ kind: 'malformed-response', calls: options.calls ?? [1], replaceWith: options.replaceWith ?? (() => ({})) }),
 };
 
-export interface LabResult { status: 'passed' | 'failed'; checks: Assertion[]; events: TraceEvent[] }
+export interface LabResult { status: 'passed' | 'failed'; checks: Check[]; events: LabEvent[] }
 
 function snapshot(value: unknown): Record<string, unknown> {
   try { return structuredClone({ value }); } catch { return { value: String(value) }; }
@@ -43,10 +58,10 @@ function snapshot(value: unknown): Record<string, unknown> {
 
 export function createLab(options: { clock?: Clock } = {}) {
   const clock = options.clock ?? virtualClock();
-  const events: TraceEvent[] = [];
-  const checks: Assertion[] = [];
+  const events: LabEvent[] = [];
+  const checks: Check[] = [];
   const executions = new Map<string, number>();
-  const record = (kind: TraceEvent['kind'], message: string, data: Record<string, unknown> = {}) => {
+  const record = (kind: LabEvent['kind'], message: string, data: Record<string, unknown> = {}) => {
     events.push({ sequence: events.length + 1, timeMs: clock.now(), kind, message, data });
   };
 

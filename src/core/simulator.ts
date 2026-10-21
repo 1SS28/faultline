@@ -1,11 +1,8 @@
+import { ToolFailure } from '../../packages/sdk/src/index.js';
 import type { Refund, RefundRequest, Scenario, TraceEvent } from './types.js';
 
-export class ToolFailure extends Error {
-  constructor(public readonly code: 'TIMEOUT' | 'RATE_LIMIT', message: string, public readonly retryAfterMs = 0) {
-    super(message);
-    this.name = 'ToolFailure';
-  }
-}
+// One error class across the built-in agents, the model adapters and the SDK, so `instanceof ToolFailure` means the same everywhere.
+export { ToolFailure };
 
 export class ToolBudgetExhausted extends Error {
   constructor() { super('Tool-call budget exhausted'); this.name = 'ToolBudgetExhausted'; }

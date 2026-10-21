@@ -8,7 +8,7 @@
 - Job progress and a recent-queue view in the dashboard. Run history separates fixture evidence from live-model evidence.
 - The dashboard has been checked by hand in a browser at desktop and phone widths: all four scenarios, run history and filters, opening saved runs, evidence export, and the error shown when the API is down.
 - Claude (Messages API) and OpenAI (Responses API) adapters sharing one prompt, tool set and argument validation, with bounded model calls and output, explicit model selection, prompt fingerprints, and usage metadata. A live trial stops once the simulated tool's call budget is spent.
-- An SDK (`src/sdk`, `docs/SDK.md`) that injects the same four kinds of fault into any tool function, with checks written against the user's own service.
+- An SDK (`packages/sdk`, Apache-2.0, no dependencies) that injects the same four kinds of fault into any tool function, with checks written against the user's own service. It builds as the `faultline-sdk` package.
 - Repeated-trial CLI and JSON reports covering per-scenario pass rates, assertion counts, and Wilson intervals for live trials only.
 - Local PostgreSQL adapter and Compose file.
 - CI on GitHub runs the build, tests, demo, regression command, and a fixture evaluation, and passes.
@@ -17,7 +17,7 @@
 ## Not verified
 
 - No live model call has happened. Both adapters are only tested against simulated responses. The first paid run needs a local API key, a selected model, and `--accept-costs`. See LIVE-EVALUATION.md.
-- No team outside this project has used the SDK. It isn't published as a package, and its results don't appear in the dashboard.
+- No team outside this project has used the SDK. It is packaged but not yet published to npm, and its results don't appear in the dashboard.
 - Docker, networked PostgreSQL, and parallel workers against a real PostgreSQL server are unrun. Existing concurrency tests use the embedded engine's single connection.
 - No AWS resources exist.
 

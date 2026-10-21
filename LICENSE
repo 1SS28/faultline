@@ -1,0 +1,10 @@
+Copyright (c) 2026 Sanjey. All rights reserved.
+
+This software is proprietary. No permission is granted to use, copy, modify,
+merge, publish, distribute, sublicense, or sell it, in whole or in part,
+without written permission from the copyright holder.
+
+Exception: the Faultline SDK in packages/sdk is licensed under the Apache
+License, Version 2.0. See packages/sdk/LICENSE.
+
+Third-party packages used by this software remain under their own licenses.

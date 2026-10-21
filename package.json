@@ -2,6 +2,7 @@
   "name": "faultline",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "description": "Fault injection and state-based regression tests for agent tool workflows",
   "engines": {
@@ -12,7 +13,7 @@
     "start": "tsx src/api/server.ts",
     "demo": "tsx src/cli.ts demo",
     "test": "tsx --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json && tsc --project site/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc --project web/tsconfig.json && tsc --project site/tsconfig.json && tsc --project packages/sdk/tsconfig.json --noEmit",
     "check": "npm run typecheck && npm test",
     "faultline": "tsx src/cli.ts",
     "dev:api": "tsx watch src/api/server.ts",
@@ -20,6 +21,7 @@
     "dev:site": "vite --config site/vite.config.ts",
     "build:site": "tsc --project site/tsconfig.json && vite build --config site/vite.config.ts",
     "preview:site": "vite preview --config site/vite.config.ts",
+    "build:sdk": "tsc --project packages/sdk/tsconfig.json",
     "build": "npm run typecheck && vite build",
     "worker": "tsx src/jobs/main.ts",
     "evaluate": "tsx src/evaluation/cli.ts"

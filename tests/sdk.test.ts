@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLab, faults, formatResult, ToolFailure } from '../src/sdk/index.js';
+import { createLab, faults, formatResult, ToolFailure } from '../packages/sdk/src/index.js';
 
 // A stand-in for a team's own email service: it records every email it sends and honours idempotency keys.
 function emailService() {
