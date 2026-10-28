@@ -132,4 +132,4 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 
 ## License
 
-Faultline is proprietary; see `LICENSE`. The SDK in `packages/sdk` is licensed under the Apache License, Version 2.0.
+Apache License, Version 2.0. See `LICENSE` and `NOTICE`. The SDK in `packages/sdk` carries its own copy of the same license.

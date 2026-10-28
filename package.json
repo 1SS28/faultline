@@ -2,7 +2,7 @@
   "name": "faultline",
   "version": "0.1.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Fault injection and state-based regression tests for agent tool workflows",
   "engines": {
