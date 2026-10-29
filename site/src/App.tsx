@@ -172,7 +172,7 @@ function Demo({ initial }: { initial?: Pair }) {
     <div className="wrap">
       <div className="chamber-head">
         <h2 className="title" id="demo-title">Try it</h2>
-        <p className="chamber-sub">Two agents get the same task: refund a customer $129. Pick a fault and see what each one does.</p>
+        <p className="intro chamber-sub">Two agents get the same task: refund a customer $129. Pick a fault and see what each one does.</p>
       </div>
       <div className="picker" role="tablist" aria-label="Choose what goes wrong" onKeyDown={event => {
         const step = ({ ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 } as Record<string, number>)[event.key];
@@ -191,7 +191,6 @@ function Demo({ initial }: { initial?: Pair }) {
       </div>
       <p className="sr-only" aria-live="polite">{pair ? agents.map(agent => `${agent.name} ${pair[agent.key].status}.`).join(' ') : ''}</p>
       <div className="run-line">
-        <span className="live" aria-hidden="true" />
         <p>Both runs just happened in your browser, using Faultline's real simulator, in <span className="ms" key={pair?.naive.id}>{elapsed.toFixed(2)} ms</span>.</p>
         <button className="again" type="button" onClick={() => setRound(value => value + 1)}><RotateCcw size={15} aria-hidden="true" />Run again</button>
       </div>
