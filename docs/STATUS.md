@@ -12,7 +12,7 @@
 - Repeated-trial CLI and JSON reports covering per-scenario pass rates, assertion counts, and Wilson intervals for live trials only.
 - Local PostgreSQL adapter and Compose file.
 - CI on GitHub runs the build, tests, demo, regression command, and a fixture evaluation, and passes.
-- A static product site in `site/` builds for Vercel. Its demo runs the simulator in the browser. It has not been deployed.
+- The product site in `site/` is live at https://faultline-brown.vercel.app. Its demo runs the simulator in the browser.
 
 ## Not verified
 

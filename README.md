@@ -32,7 +32,7 @@ Nothing in the dashboard is precomputed. Every comparison executes the simulator
 
 ## Product website
 
-`site/` is the public product page. Its demo imports `src/core` and runs the real simulator in the visitor's browser, so it needs no API, database or key.
+`site/` is the public product page, live at https://faultline-brown.vercel.app. Its demo imports `src/core` and runs the real simulator in the visitor's browser, so it needs no API, database or key.
 
 ```sh
 npm run dev:site
