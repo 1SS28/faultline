@@ -1,0 +1,24 @@
+{
+  "name": "faultline-infra",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "AWS infrastructure for Faultline, written with the AWS CDK",
+  "scripts": {
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.275.0",
+    "constructs": "^10.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "aws-cdk": "^2.1147.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
