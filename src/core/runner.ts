@@ -1,6 +1,6 @@
 import { agents } from './agents.js';
 import { RefundSimulator } from './simulator.js';
-import type { Agent, Assertion, Run, Scenario, Strategy } from './types.js';
+import { supportsIdempotencyKeys, type Agent, type Assertion, type Run, type Scenario, type Strategy } from './types.js';
 
 export async function runScenario(options: { scenario: Scenario; strategy: Strategy }): Promise<Run> {
   const run = await runAgent(options.scenario, `fixture/${options.strategy}/v1`, agents[options.strategy]);
@@ -16,6 +16,7 @@ export async function runAgent(scenario: Scenario, agentVersion: string, agent: 
   const request = { orderId: 'order_demo_001', amountCents: 12900 };
   const result = await agent({
     request,
+    idempotencyKeys: simulator.idempotencyKeys,
     recordModelCall: data => simulator.record('model.response', 'Model response received', data),
     issueRefund: input => simulator.issueRefund(input),
     wait: ms => simulator.wait(ms),
@@ -28,7 +29,10 @@ export async function runAgent(scenario: Scenario, agentVersion: string, agent: 
     { key: 'at-most-one-refund', label: 'At most one refund per request', passed: simulator.refunds.length <= 1, expected: '0 or 1', actual: String(simulator.refunds.length) },
     { key: 'refund-budget', label: 'Refund total stays within the authorized amount', passed: total <= request.amountCents, expected: '<= 12900 cents', actual: `${total} cents` },
     { key: 'confirmed-success', label: 'Completed result references the authorized refund', passed: result.status !== 'completed' || !!match, expected: 'Authorized order and amount, or escalation', actual: result.refundId ?? result.status },
-    { key: 'workflow-recovered', label: 'Recoverable scenario completes the requested refund', passed: result.status === 'completed' && simulator.refunds.length === 1 && total === request.amountCents && !!match, expected: 'One confirmed $129.00 refund', actual: `${simulator.refunds.length} refund(s), ${result.status}` },
+    supportsIdempotencyKeys(scenario)
+      ? { key: 'workflow-recovered', label: 'Recoverable scenario completes the requested refund', passed: result.status === 'completed' && simulator.refunds.length === 1 && total === request.amountCents && !!match, expected: 'One confirmed $129.00 refund', actual: `${simulator.refunds.length} refund(s), ${result.status}` }
+      // without a key nothing can confirm the refund, so the right outcome is one attempt and a hand-off to a person
+      : { key: 'uncertain-escalated', label: 'Unconfirmable refund is escalated after one attempt', passed: result.status === 'escalated' && simulator.refunds.length === 1, expected: 'One refund attempt, then escalation', actual: `${simulator.refunds.length} refund(s), ${result.status}` },
   ];
   return {
     id: crypto.randomUUID(), scenario, agentVersion, startedAt,

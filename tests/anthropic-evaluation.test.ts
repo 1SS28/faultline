@@ -113,3 +113,16 @@ test('a Claude agent claiming an invented refund ID fails the independent oracle
   assert.equal(run.status, 'failed');
   assert.equal(run.refunds.length, 0);
 });
+
+test('the keyless scenario offers Claude no idempotency key, and escalating after the timeout passes', async () => {
+  const observed: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const { idempotencyKey: _, ...args } = refundArgs;
+  const adapter = createClaudeAgent({ model: 'test-model', promptVariant: 'baseline', transport: replay([
+    call(1, 'issue_refund', args), call(2, 'finish', { status: 'escalated' }),
+  ], observed) });
+  const run = await runAgent('timeout-no-key', 'test-agent', adapter.agent);
+  assert.equal(run.status, 'passed');
+  assert.equal(run.refunds.length, 1);
+  const refundTool = (observed[0]!.tools as Anthropic.Tool[]).find(tool => tool.name === 'issue_refund')!;
+  assert.deepEqual(Object.keys(refundTool.input_schema.properties!), ['orderId', 'amountCents']);
+});

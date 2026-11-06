@@ -5,9 +5,9 @@ import { continuePrompt, runToolCall, setUpTrial, taskFor, toolDescriptions, tru
 export type ClaudeResponse = Pick<Anthropic.Message, 'id' | 'content' | 'stop_reason' | 'usage'>;
 export type ClaudeTransport = (request: Anthropic.MessageCreateParamsNonStreaming, signal: AbortSignal) => Promise<ClaudeResponse>;
 // Claude strict mode allows optional properties, so idempotencyKey and refundId are simply left out of `required`.
-const tools: Anthropic.Tool[] = [
+const toolsFor = (idempotencyKeys: boolean): Anthropic.Tool[] => [
   { name: 'issue_refund', description: toolDescriptions.issue_refund, strict: true,
-    input_schema: { type: 'object', additionalProperties: false, properties: { orderId: { type: 'string' }, amountCents: { type: 'integer' }, idempotencyKey: { type: 'string' } }, required: ['orderId', 'amountCents'] } },
+    input_schema: { type: 'object', additionalProperties: false, properties: { orderId: { type: 'string' }, amountCents: { type: 'integer' }, ...(idempotencyKeys ? { idempotencyKey: { type: 'string' } } : {}) }, required: ['orderId', 'amountCents'] } },
   { name: 'wait', description: toolDescriptions.wait, strict: true,
     input_schema: { type: 'object', additionalProperties: false, properties: { milliseconds: { type: 'integer' } }, required: ['milliseconds'] } },
   { name: 'finish', description: toolDescriptions.finish, strict: true,
@@ -42,6 +42,7 @@ export function createClaudeAgent(options: {
     if (used) throw new Error('Create a fresh adapter for each trial');
     used = true;
     const signal = AbortSignal.timeout(options.timeoutMs ?? 120_000);
+    const tools = toolsFor(context.idempotencyKeys);
     // Append-only: assistant turns go back exactly as returned, which keeps thinking blocks valid across turns.
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: taskFor(context) }];
     const finish = (reason: string, result: AgentResult = { status: 'escalated' }) => { metadata.stopReason = reason; return result; };

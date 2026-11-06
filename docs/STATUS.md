@@ -3,6 +3,7 @@
 ## Working
 
 - React dashboard, simulator, fixture agents, SQL evidence, CLI, and local API.
+- Five scenarios. The newest, `timeout-no-key`, loses the reply on a service with no idempotency keys, and expects one refund attempt followed by escalation.
 - Durable SQL job queue: idempotent submission, row claims, leases, heartbeat renewal, bounded retries, attempt history, and stale-result fencing.
 - A fresh subprocess per fixture, real wall-clock deadlines, and graceful worker shutdown.
 - Job progress and a recent-queue view in the dashboard. Run history separates fixture evidence from live-model evidence.
@@ -16,7 +17,7 @@
 
 ## Not verified
 
-- Only one live model has run: `claude-sonnet-5-5` passed all 40 trials, 5 per scenario with each prompt. The refund tool always offered an idempotency key field, and a scenario without one hasn't been run. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
+- Only one live model has run. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On `timeout-no-key` it escalated in 10 of 10 trials with the baseline prompt, and refunded twice in 10 of 10 with the recovery prompt. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
 - No team outside this project has used the SDK. It is published on npm as `faultline-sdk`, and its results don't appear in the dashboard.
 - Docker is unrun. Networked PostgreSQL has run, since the AWS worker and API use RDS, but workers competing for the same jobs on a real server haven't been tested. Existing concurrency tests use the embedded engine's single connection.
 - The AWS deployment in `infra/` runs fixture trials only. Live model runs stay local, and deploys are manual. See `infra/README.md`.
@@ -26,7 +27,6 @@
 - Subprocesses isolate trusted fixtures. They are not a security sandbox, and arbitrary uploaded code is not accepted.
 - Live evaluations run through the CLI, separately from the fixture queue. An interrupted live trial keeps the usage metadata known at that point but loses its partial tool trace.
 - `src/billing/store.ts` and `sql/004_billing.sql` are unreferenced. The schema gets applied on migration, but nothing calls the store and nothing tests it. Either wire it into the evaluation CLI or drop it.
-- The `workflow-recovered` assertion treats escalation as a failure in every scenario. That holds for the four current faults, but a fault where escalation is the correct outcome will need a per-scenario expectation.
 - The AWS API has one shared API key. Per-user authentication, tenant isolation, container deployment, and outside validation are still open.
 
 ## Running locally

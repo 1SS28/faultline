@@ -1,5 +1,7 @@
-export const scenarios = ['baseline', 'timeout-after-commit', 'rate-limit', 'malformed-response'] as const;
+export const scenarios = ['baseline', 'timeout-after-commit', 'rate-limit', 'malformed-response', 'timeout-no-key'] as const;
 export type Scenario = typeof scenarios[number];
+// timeout-no-key models a service with no idempotency support, where the only safe answer to a lost reply is escalation
+export const supportsIdempotencyKeys = (scenario: Scenario) => scenario !== 'timeout-no-key';
 export const strategies = ['naive', 'resilient'] as const;
 export type Strategy = typeof strategies[number];
 export interface RefundRequest { orderId: string; amountCents: number; idempotencyKey?: string }
@@ -15,6 +17,8 @@ export interface Assertion { key: string; label: string; passed: boolean; expect
 export interface AgentResult { status: 'completed' | 'escalated'; refundId?: string }
 export interface AgentContext {
   request: RefundRequest;
+  /** Whether the refund service honors idempotency keys. When false it ignores them. */
+  idempotencyKeys: boolean;
   issueRefund(request: RefundRequest): Promise<unknown>;
   wait(ms: number): Promise<void>;
   recordRetry(attempt: number, reason: string): void;

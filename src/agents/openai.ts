@@ -7,9 +7,11 @@ export type { PromptVariant } from './shared.js';
 export type ModelResponse = Pick<Response, 'id' | 'output' | 'usage' | 'status'> & Partial<Pick<Response, 'incomplete_details'>>;
 export type ModelTransport = (request: ResponseCreateParamsNonStreaming, signal: AbortSignal) => Promise<ModelResponse>;
 // OpenAI strict mode requires every property in `required`, so optional fields are nullable instead.
-const tools: FunctionTool[] = [
+const toolsFor = (idempotencyKeys: boolean): FunctionTool[] => [
   { type: 'function', name: 'issue_refund', description: toolDescriptions.issue_refund, strict: true,
-    parameters: { type: 'object', additionalProperties: false, properties: { orderId: { type: 'string' }, amountCents: { type: 'integer' }, idempotencyKey: { type: ['string', 'null'] } }, required: ['orderId', 'amountCents', 'idempotencyKey'] } },
+    parameters: idempotencyKeys
+      ? { type: 'object', additionalProperties: false, properties: { orderId: { type: 'string' }, amountCents: { type: 'integer' }, idempotencyKey: { type: ['string', 'null'] } }, required: ['orderId', 'amountCents', 'idempotencyKey'] }
+      : { type: 'object', additionalProperties: false, properties: { orderId: { type: 'string' }, amountCents: { type: 'integer' } }, required: ['orderId', 'amountCents'] } },
   { type: 'function', name: 'wait', description: toolDescriptions.wait, strict: true,
     parameters: { type: 'object', additionalProperties: false, properties: { milliseconds: { type: 'integer' } }, required: ['milliseconds'] } },
   { type: 'function', name: 'finish', description: toolDescriptions.finish, strict: true,
@@ -39,6 +41,7 @@ export function createOpenAIAgent(options: {
     if (used) throw new Error('Create a fresh adapter for each trial');
     used = true;
     const signal = AbortSignal.timeout(options.timeoutMs ?? 120_000);
+    const tools = toolsFor(context.idempotencyKeys);
     const input: ResponseInputItem[] = [{ role: 'user', content: taskFor(context) }];
     const finish = (reason: string, result: AgentResult = { status: 'escalated' }) => { metadata.stopReason = reason; return result; };
     for (let turn = 0; turn < maxTurns; turn++) {

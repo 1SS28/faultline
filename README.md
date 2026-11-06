@@ -57,7 +57,7 @@ npm start
 
 A single `run` exits 1 on a detected regression, 0 on success, and 2 for invalid arguments. The deliberately broken fixture should fail. `npm run demo` compares two agents, so its exit semantics differ. `regressions` lists scenarios where an agent version passes less often than the version first tested before it, and exits 1 if there are any, so CI can use it as a gate.
 
-Scenarios: `baseline`, `timeout-after-commit`, `rate-limit`, `malformed-response`.
+Scenarios: `baseline`, `timeout-after-commit`, `rate-limit`, `malformed-response`, `timeout-no-key`. The last one loses the reply on a service with no idempotency keys, so a retry pays twice and the safe outcome is to escalate.
 
 ## Local API
 
@@ -114,7 +114,7 @@ Assertions inspect the ledger independently of whatever the agent claims. They c
 
 Simulation time is virtual: a 1000ms retry delay advances the test clock without sleeping, while `durationMs` records real execution time. The simulator's idempotency behavior assumes the underlying service honors keys with matching semantics, since a client key alone can't make an arbitrary provider idempotent.
 
-These tests establish behavior for the supplied fixtures and failure model, not a general guarantee of agent reliability. The Claude adapter has run live: `claude-sonnet-5-5` passed all 40 trials across the four scenarios. The OpenAI adapter works against simulated responses but hasn't made a paid call yet. Arbitrary HTTP fault injection, container isolation, and hosted authentication are still open. See `docs/LIVE-EVALUATION.md`.
+These tests establish behavior for the supplied fixtures and failure model, not a general guarantee of agent reliability. The Claude adapter has run live. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On a refund tool with no idempotency key, the recovery prompt made it refund twice in 10 of 10 trials, while the baseline prompt escalated in 10 of 10. The OpenAI adapter works against simulated responses but hasn't made a paid call yet. Arbitrary HTTP fault injection, container isolation, and hosted authentication are still open. See `docs/LIVE-EVALUATION.md`.
 
 ## Project map
 

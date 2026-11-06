@@ -9,9 +9,10 @@ const scenarioInfo: Record<Scenario, { name: string; short: string; description:
   'timeout-after-commit': { name: 'Timeout after commit', short: 'Lost acknowledgement', description: 'The refund succeeds. The response never arrives. Does the agent safely retry?', code: 'FAULT_01' },
   'rate-limit': { name: 'Rate limit', short: '429 · Retry-After', description: 'The service rejects requests for one second. Does the agent wait before retrying?', code: 'FAULT_02' },
   'malformed-response': { name: 'Malformed response', short: 'Missing confirmation', description: 'The refund succeeds, but the response has no confirmation ID. Does the agent verify the outcome?', code: 'FAULT_03' },
+  'timeout-no-key': { name: 'Timeout, no idempotency key', short: 'Unconfirmable refund', description: 'The refund succeeds and the response never arrives, and the service has no idempotency keys. Does the agent escalate instead of paying twice?', code: 'FAULT_04' },
   baseline: { name: 'Healthy baseline', short: 'No fault injected', description: 'All tools respond normally. Establish that both agents complete the same task.', code: 'CONTROL' },
 };
-const scenarioOrder: Scenario[] = ['timeout-after-commit', 'rate-limit', 'malformed-response', 'baseline'];
+const scenarioOrder: Scenario[] = ['timeout-after-commit', 'rate-limit', 'malformed-response', 'timeout-no-key', 'baseline'];
 const money = (cents: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 const strategyOf = (run: Pick<Run, 'agentVersion' | 'metadata'>): Strategy => run.agentVersion.includes('/resilient/') || run.metadata?.promptVariant === 'recovery' ? 'resilient' : 'naive';
 const names: Record<Strategy, string> = { naive: 'Naive agent', resilient: 'Resilient agent' };

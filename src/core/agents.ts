@@ -20,17 +20,19 @@ export const naive: Agent = async context => {
   return { status: 'escalated' };
 };
 
-/** Stable key, schema validation, bounded retries, and Retry-After handling. */
+/** Stable key, schema validation, bounded retries, and Retry-After handling. Escalates when a retry could pay twice. */
 export const resilient: Agent = async context => {
-  const request = { ...context.request, idempotencyKey: `refund:${context.request.orderId}:full` };
+  const request = context.idempotencyKeys ? { ...context.request, idempotencyKey: `refund:${context.request.orderId}:full` } : context.request;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const response = await context.issueRefund(request);
       if (confirmed(response)) return { status: 'completed', refundId: response.refundId };
+      if (!context.idempotencyKeys) break;
       if (attempt < 3) context.recordRetry(attempt + 1, 'Response was not a valid refund confirmation');
     } catch (error) {
       if (!(error instanceof ToolFailure)) throw error;
-      if (attempt === 3) break;
+      // a 429 means nothing committed; any other failure may have
+      if (attempt === 3 || (!context.idempotencyKeys && error.code !== 'RATE_LIMIT')) break;
       context.recordRetry(attempt + 1, error.message);
       if (error.code === 'RATE_LIMIT') await context.wait(error.retryAfterMs);
     }

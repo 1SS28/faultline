@@ -1,5 +1,5 @@
 import { ToolFailure } from '../../packages/sdk/src/index.js';
-import type { Refund, RefundRequest, Scenario, TraceEvent } from './types.js';
+import { supportsIdempotencyKeys, type Refund, type RefundRequest, type Scenario, type TraceEvent } from './types.js';
 
 // One error class across the built-in agents, the model adapters and the SDK, so `instanceof ToolFailure` means the same everywhere.
 export { ToolFailure };
@@ -16,7 +16,8 @@ export class RefundSimulator {
   calls = 0;
   private faultInjected = false;
   private availableAt = 0;
-  constructor(readonly scenario: Scenario, readonly maxCalls = 5) {}
+  readonly idempotencyKeys: boolean;
+  constructor(readonly scenario: Scenario, readonly maxCalls = 5) { this.idempotencyKeys = supportsIdempotencyKeys(scenario); }
 
   record(kind: TraceEvent['kind'], message: string, data: Record<string, unknown> = {}) {
     this.events.push({ sequence: this.events.length + 1, timeMs: this.nowMs, kind, message, data: structuredClone(data) });
@@ -44,18 +45,20 @@ export class RefundSimulator {
         throw new ToolFailure('RATE_LIMIT', 'Rate limited', this.availableAt - this.nowMs);
       }
     }
-    const existing = request.idempotencyKey
-      ? this.refunds.find(refund => refund.idempotencyKey === request.idempotencyKey)
+    // a service without idempotency support drops the key instead of rejecting it
+    const accepted: RefundRequest = this.idempotencyKeys ? request : { orderId: request.orderId, amountCents: request.amountCents };
+    const existing = accepted.idempotencyKey
+      ? this.refunds.find(refund => refund.idempotencyKey === accepted.idempotencyKey)
       : undefined;
-    if (existing && (existing.orderId !== request.orderId || existing.amountCents !== request.amountCents)) {
+    if (existing && (existing.orderId !== accepted.orderId || existing.amountCents !== accepted.amountCents)) {
       throw new Error('Idempotency key reused with different arguments');
     }
-    const refund = existing ?? { id: `refund_${this.refunds.length + 1}`, ...request };
+    const refund = existing ?? { id: `refund_${this.refunds.length + 1}`, ...accepted };
     if (!existing) {
       this.refunds.push(refund);
       this.record('tool.commit', 'Refund committed to service ledger', { ...refund });
     }
-    if (!this.faultInjected && this.scenario === 'timeout-after-commit') {
+    if (!this.faultInjected && (this.scenario === 'timeout-after-commit' || this.scenario === 'timeout-no-key')) {
       this.faultInjected = true;
       this.record('fault.injected', 'Response lost after the refund committed', { code: 'TIMEOUT' });
       throw new ToolFailure('TIMEOUT', 'Connection timed out; outcome unknown');

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runAgent, runScenario } from '../src/core/runner.js';
-import { scenarios } from '../src/core/types.js';
+import { scenarios, supportsIdempotencyKeys } from '../src/core/types.js';
 import { RefundSimulator } from '../src/core/simulator.js';
 
 test('a lost acknowledgement causes the naive agent to refund twice', async () => {
@@ -14,7 +14,7 @@ test('a lost acknowledgement causes the naive agent to refund twice', async () =
   const fault = run.events.find(event => event.kind === 'fault.injected')!;
   assert.ok(commit.sequence < fault.sequence, 'commit precedes response loss');
 });
-for (const scenario of scenarios) {
+for (const scenario of scenarios.filter(supportsIdempotencyKeys)) {
   test(`resilient fixture recovers from ${scenario} without duplicate side effects`, async () => {
     const run = await runScenario({ scenario, strategy: 'resilient' });
     assert.equal(run.status, 'passed');
@@ -57,4 +57,28 @@ test('a refund for the wrong order cannot satisfy the success assertion', async 
   });
   assert.equal(run.status, 'failed');
   assert.equal(run.assertions.find(assertion => assertion.key === 'confirmed-success')?.passed, false);
+});
+
+test('without idempotency keys, retrying after a lost reply refunds twice', async () => {
+  const run = await runScenario({ scenario: 'timeout-no-key', strategy: 'naive' });
+  assert.equal(run.status, 'failed');
+  assert.equal(run.refunds.length, 2);
+});
+test('without idempotency keys, the resilient fixture escalates after one refund', async () => {
+  const run = await runScenario({ scenario: 'timeout-no-key', strategy: 'resilient' });
+  assert.equal(run.status, 'passed');
+  assert.equal(run.refunds.length, 1);
+  assert.equal(run.result.status, 'escalated');
+  assert.ok(run.assertions.every(assertion => assertion.passed));
+});
+test('a service without idempotency support ignores a reused key', async () => {
+  const simulator = new RefundSimulator('timeout-no-key');
+  await assert.rejects(() => simulator.issueRefund({ orderId: 'one', amountCents: 100, idempotencyKey: 'same' }), /timed out/);
+  await simulator.issueRefund({ orderId: 'one', amountCents: 100, idempotencyKey: 'same' });
+  assert.equal(simulator.refunds.length, 2);
+});
+test('escalating without trying fails the keyless scenario', async () => {
+  const run = await runAgent('timeout-no-key', 'fixture/give-up/v1', async () => ({ status: 'escalated' }));
+  assert.equal(run.status, 'failed');
+  assert.equal(run.assertions.find(assertion => assertion.key === 'uncertain-escalated')?.passed, false);
 });

@@ -10,7 +10,7 @@ The local React dashboard uses the existing API: scenario/agent selection, run h
 
 ## 3. Real agent integration (adapters done, first live run done)
 
-Claude and OpenAI adapters and the repeated-trial CLI are implemented. The Claude adapter has run 40 live trials with `claude-sonnet-5-5`, and all passed. See LIVE-EVALUATION.md. Next: a refund tool with no idempotency key field, other models, and a first live OpenAI run. Preserve the same tool boundary and state-based assertions. Store model/version/configuration metadata. Run repeated trials and report sample counts and variance; do not present a single passing run as reliability proof.
+Claude and OpenAI adapters and the repeated-trial CLI are implemented. The Claude adapter has run 60 live trials with `claude-sonnet-5-5`. It passed all 40 trials of the first four scenarios. On a refund tool with no idempotency key, the recovery prompt made it refund twice in 10 of 10 trials. See LIVE-EVALUATION.md. Next: other models, a recovery prompt that holds up without a key, and a first live OpenAI run. Preserve the same tool boundary and state-based assertions. Store model/version/configuration metadata. Run repeated trials and report sample counts and variance; do not present a single passing run as reliability proof.
 
 Add an exported SDK and example agent owned by another developer. The validation milestone is discovering a real bug in that agent.
 

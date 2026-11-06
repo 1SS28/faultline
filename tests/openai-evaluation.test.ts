@@ -152,3 +152,17 @@ test('an OpenAI agent that keeps calling a spent tool stops at the tool budget, 
   assert.equal(adapter.metadata.modelCalls, 6);
   assert.equal(run.refunds.length, 5);
 });
+
+test('the keyless scenario offers OpenAI no idempotency key, and a blind retry refunds twice', async () => {
+  const observed: any[] = [];
+  const args = { orderId: 'order_demo_001', amountCents: 12900 };
+  const adapter = createOpenAIAgent({ model: 'test-model', promptVariant: 'baseline', transport: scripted([
+    ['issue_refund', args], ['issue_refund', args], ['finish', { status: 'completed', refundId: 'refund_2' }],
+  ], observed) });
+  const run = await runAgent('timeout-no-key', 'test-agent', adapter.agent);
+  assert.equal(run.status, 'failed');
+  assert.equal(run.refunds.length, 2);
+  const refundTool = observed[0].tools.find((tool: any) => tool.name === 'issue_refund');
+  assert.deepEqual(refundTool.parameters.required, ['orderId', 'amountCents']);
+  assert.ok(!('idempotencyKey' in refundTool.parameters.properties));
+});
