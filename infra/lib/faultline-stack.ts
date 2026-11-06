@@ -1,6 +1,8 @@
 import * as path from 'node:path';
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -8,6 +10,7 @@ import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import { scenarios, strategies } from '../../src/core/types.js';
@@ -22,6 +25,7 @@ export class FaultlineStack extends Stack {
   readonly deadLetterQueue: sqs.Queue;
   readonly worker: nodejs.NodejsFunction;
   readonly api: apigateway.RestApi;
+  readonly alarmTopic: sns.Topic;
 
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -154,6 +158,7 @@ export class FaultlineStack extends Stack {
     // The HTTP API. Every request needs an API key. POST /jobs goes straight from API Gateway to
     // the queue with no function in between, and the GET routes read results from the database.
     this.api = new apigateway.RestApi(this, 'Api', {
+      restApiName: 'faultline',
       description: 'Faultline jobs and runs',
       endpointTypes: [apigateway.EndpointType.REGIONAL],
       deployOptions: { stageName: 'v1', throttlingRateLimit: 5, throttlingBurstLimit: 10 },
@@ -217,6 +222,55 @@ export class FaultlineStack extends Stack {
     usagePlan.addApiKey(apiKey);
     usagePlan.addApiStage({ stage: this.api.deploymentStage });
 
+    // Alarms notify this topic, in both directions: when something breaks and when it recovers.
+    // An email address is subscribed once from the CLI, so no personal address is stored in this
+    // public repo.
+    this.alarmTopic = new sns.Topic(this, 'AlarmTopic', { displayName: 'Faultline alarms', enforceSSL: true });
+    // The encrypted-only rule replaces the topic's default access policy, so CloudWatch needs an
+    // explicit grant. It is limited to this account's Faultline alarms.
+    this.alarmTopic.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowFaultlineAlarms',
+      principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+      actions: ['sns:Publish'],
+      resources: [this.alarmTopic.topicArn],
+      conditions: {
+        ArnLike: { 'aws:SourceArn': `arn:aws:cloudwatch:${this.region}:${this.account}:alarm:faultline-*` },
+        StringEquals: { 'aws:SourceAccount': this.account },
+      },
+    }));
+    const notify = new actions.SnsAction(this.alarmTopic);
+    const alarm = (id: string, alarmName: string, alarmDescription: string, metric: cloudwatch.IMetric, threshold: number) => {
+      const created = new cloudwatch.Alarm(this, id, {
+        alarmName,
+        alarmDescription,
+        metric,
+        threshold,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        // No data means no traffic, which is normal for this stack.
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      created.addAlarmAction(notify);
+      created.addOkAction(notify);
+    };
+    const fiveMinutes = { period: Duration.minutes(5) };
+    alarm('DeadLetterAlarm', 'faultline-dead-letters',
+      'A message failed five times and moved to the dead-letter queue. Read it there, fix the cause, then delete it.',
+      this.deadLetterQueue.metricApproximateNumberOfMessagesVisible(fiveMinutes), 1);
+    // Failed trials and messages the worker retries don't count here. This catches the worker
+    // itself failing, usually because it couldn't reach the database or ran out of time.
+    alarm('WorkerErrorAlarm', 'faultline-worker-errors',
+      'The worker crashed or timed out. Check the worker log.',
+      this.worker.metricErrors(fiveMinutes), 1);
+    alarm('ApiErrorAlarm', 'faultline-api-errors',
+      'The API returned a 5xx error. Check the API reader log, or the queue if POST /jobs failed.',
+      this.api.metricServerError(fiveMinutes), 1);
+    // A message that keeps failing leaves for the dead-letter queue within about 15 minutes, so
+    // anything older means the worker is down or falling behind.
+    alarm('QueueBacklogAlarm', 'faultline-queue-backlog',
+      'A job has waited more than 20 minutes, so the worker is down or falling behind.',
+      this.queue.metricApproximateAgeOfOldestMessage(fiveMinutes), 20 * 60);
+
     new CfnOutput(this, 'DatabaseHost', { value: this.database.dbInstanceEndpointAddress });
     new CfnOutput(this, 'DatabaseSecretName', { value: databaseSecret.secretName });
     new CfnOutput(this, 'QueueUrl', { value: this.queue.queueUrl });
@@ -224,5 +278,6 @@ export class FaultlineStack extends Stack {
     new CfnOutput(this, 'WorkerLogGroup', { value: this.worker.logGroup.logGroupName });
     new CfnOutput(this, 'ApiUrl', { value: this.api.url });
     new CfnOutput(this, 'ApiKeyId', { value: apiKey.keyId });
+    new CfnOutput(this, 'AlarmTopicArn', { value: this.alarmTopic.topicArn });
   }
 }

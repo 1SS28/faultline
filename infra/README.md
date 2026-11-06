@@ -12,12 +12,13 @@ This folder describes Faultline's AWS setup as code, using the AWS CDK in TypeSc
 - A dead-letter queue for messages the worker failed on five times, such as malformed JSON.
 - A private connection to Secrets Manager, so the functions can read the password without internet access.
 - An HTTP API on API Gateway. Every request needs an API key, and each key is limited to 2 requests a second and 1,000 a day. `POST /jobs` checks the body against the app's list of scenarios and sends it straight to the queue, with no function in between. The `GET` routes go to a small read function inside the private network.
+- Four CloudWatch alarms. They email you when a message lands in the dead-letter queue, when the worker crashes or times out, when the API returns a server error, and when a job has waited more than 20 minutes. Each one emails again when it recovers.
 
 Only the worker and the read function can reach the database and the password, and the database's certificate is checked on every connection.
 
 SQS can deliver the same message twice. The worker uses the message ID as the job's idempotency key, so a second delivery finds the existing job instead of running the trial again.
 
-Still to come: an alarm, deploys from GitHub Actions, and a query that flags agent versions whose pass rate dropped. Live model runs stay on your laptop, so no model API key is ever stored in AWS.
+Still to come: deploys from GitHub Actions, and a query that flags agent versions whose pass rate dropped. Live model runs stay on your laptop, so no model API key is ever stored in AWS.
 
 ## Cost
 
@@ -29,6 +30,7 @@ While deployed it costs about $22 a month. Tear it down when you are not using i
 | Private connection to Secrets Manager | about $7.30 |
 | Storage, 20 GB | about $2.30 |
 | Password secret | $0.40 |
+| Four alarms | $0.40 |
 | API, queue, functions and logs at this volume | under $0.10 |
 
 ## Check it locally
@@ -67,7 +69,7 @@ npx cdk bootstrap --profile faultline
 npx cdk deploy --profile faultline
 ```
 
-The first deploy takes about ten minutes, mostly waiting for the database. When it finishes it prints the API's URL and key ID, both queue URLs, the worker's log group, the database's host and the secret's name.
+The first deploy takes about ten minutes, mostly waiting for the database. When it finishes it prints the API's URL and key ID, the alarm topic, both queue URLs, the worker's log group, the database's host and the secret's name.
 
 ## Try it
 
@@ -100,6 +102,20 @@ aws logs tail <WorkerLogGroup> --profile faultline --since 10m
 A message the worker can't read, sent straight to the queue, is retried and then moved to the dead-letter queue. API Gateway rejects a malformed body before it gets that far.
 
 Retrying `POST /jobs` creates a second job. Duplicates are caught per queue delivery, not per client request.
+
+## Get alarm emails
+
+The alarms send to a notification topic. Subscribe your email once, using the `AlarmTopicArn` the deploy printed, then click the confirmation link AWS emails you. The address stays out of the code, so it never lands in the public repo.
+
+```bash
+aws sns subscribe --profile faultline --topic-arn <AlarmTopicArn> --protocol email --notification-endpoint <your email>
+```
+
+To check that emails arrive, force an alarm on. It goes back to normal within five minutes and emails you again.
+
+```bash
+aws cloudwatch set-alarm-state --profile faultline --alarm-name faultline-dead-letters --state-value ALARM --state-reason "Testing alarm email"
+```
 
 ## Tear down
 

@@ -117,6 +117,38 @@ test('both queues refuse unencrypted connections', () => {
   });
 });
 
+test('alarms watch dead letters, errors and backlog, and notify both ways', () => {
+  const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'));
+  assert.deepEqual(alarms.map(alarm => alarm.Properties.AlarmName).sort(),
+    ['faultline-api-errors', 'faultline-dead-letters', 'faultline-queue-backlog', 'faultline-worker-errors']);
+  for (const alarm of alarms) {
+    assert.equal(alarm.Properties.AlarmActions.length, 1);
+    assert.deepEqual(alarm.Properties.OKActions, alarm.Properties.AlarmActions);
+    assert.equal(alarm.Properties.TreatMissingData, 'notBreaching');
+  }
+  template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+    AlarmName: 'faultline-dead-letters', MetricName: 'ApproximateNumberOfMessagesVisible', Threshold: 1,
+  });
+});
+
+test('CloudWatch may publish to the alarm topic, over encrypted connections only', () => {
+  template.hasResourceProperties('AWS::SNS::TopicPolicy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({ Effect: 'Deny', Condition: { Bool: { 'aws:SecureTransport': 'false' } } }),
+        Match.objectLike({
+          Effect: 'Allow', Action: 'sns:Publish', Principal: { Service: 'cloudwatch.amazonaws.com' },
+          Condition: Match.objectLike({ StringEquals: Match.objectLike({ 'aws:SourceAccount': Match.anyValue() }) }),
+        }),
+      ]),
+    }),
+  });
+});
+
+test('no email address is stored in the template', () => {
+  template.resourceCountIs('AWS::SNS::Subscription', 0);
+});
+
 test('tearing the stack down deletes the database', () => {
   template.hasResource('AWS::RDS::DBInstance', { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
 });
