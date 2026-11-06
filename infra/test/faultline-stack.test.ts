@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { scenarios } from '../../src/core/types.js';
 import { FaultlineStack } from '../lib/faultline-stack';
 
-// Skips bundling the worker, which these tests don't need.
+// Skips bundling the functions, which these tests do not need.
 const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
 const template = Template.fromStack(new FaultlineStack(app, 'Test', { env: { region: 'us-east-2' } }));
 const groupId = (description: string) => {
@@ -31,15 +32,16 @@ test('the database is the free plan size and stays private', () => {
   });
 });
 
-test('only the worker can reach the database and the password', () => {
-  const worker = groupId('Faultline worker');
-  template.resourceCountIs('AWS::EC2::SecurityGroupIngress', 2);
-  template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
-    GroupId: groupId('Faultline Postgres'), SourceSecurityGroupId: worker, CidrIp: Match.absent(),
-  });
-  template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
-    FromPort: 443, ToPort: 443, SourceSecurityGroupId: worker, CidrIp: Match.absent(),
-  });
+test('only the two functions can reach the database and the password', () => {
+  template.resourceCountIs('AWS::EC2::SecurityGroupIngress', 4);
+  for (const source of ['Faultline worker', 'Faultline API reader']) {
+    template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+      GroupId: groupId('Faultline Postgres'), SourceSecurityGroupId: groupId(source), CidrIp: Match.absent(),
+    });
+    template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+      FromPort: 443, ToPort: 443, SourceSecurityGroupId: groupId(source), CidrIp: Match.absent(),
+    });
+  }
   template.hasResourceProperties('AWS::EC2::SecurityGroup', {
     GroupDescription: 'Faultline Postgres', SecurityGroupIngress: Match.absent(),
   });
@@ -61,12 +63,37 @@ test('the worker reaches Secrets Manager privately, through one zone', () => {
   });
 });
 
-test('the worker runs on Node 24 and Graviton inside the private network', () => {
-  template.hasResourceProperties('AWS::Lambda::Function', {
-    Runtime: 'nodejs24.x',
-    Architectures: ['arm64'],
-    Timeout: 30,
-    VpcConfig: Match.objectLike({ SubnetIds: Match.anyValue() }),
+test('both functions run on Node 24 and Graviton inside the private network', () => {
+  const functions = template.findResources('AWS::Lambda::Function', { Properties: { Handler: 'index.handler' } });
+  assert.equal(Object.keys(functions).length, 2);
+  for (const fn of Object.values(functions)) {
+    assert.equal(fn.Properties.Runtime, 'nodejs24.x');
+    assert.deepEqual(fn.Properties.Architectures, ['arm64']);
+    assert.equal(fn.Properties.VpcConfig.SubnetIds.length, 2);
+  }
+});
+
+test('every API route needs an API key', () => {
+  const methods = Object.values(template.findResources('AWS::ApiGateway::Method'));
+  assert.equal(methods.length, 5);
+  for (const method of methods) assert.equal(method.Properties.ApiKeyRequired, true);
+});
+
+test('POST /jobs checks the body, then sends it straight to SQS', () => {
+  template.hasResourceProperties('AWS::ApiGateway::Method', {
+    HttpMethod: 'POST',
+    RequestValidatorId: Match.anyValue(),
+    Integration: Match.objectLike({ Type: 'AWS', PassthroughBehavior: 'NEVER', Uri: Match.objectLike({ 'Fn::Join': Match.anyValue() }) }),
+  });
+  const [model] = Object.values(template.findResources('AWS::ApiGateway::Model'));
+  assert.deepEqual(model?.Properties.Schema.properties.scenario.enum, [...scenarios]);
+  assert.equal(model?.Properties.Schema.additionalProperties, false);
+});
+
+test('each API key is throttled and capped per day', () => {
+  template.hasResourceProperties('AWS::ApiGateway::UsagePlan', {
+    Throttle: { RateLimit: 2, BurstLimit: 5 },
+    Quota: { Limit: 1000, Period: 'DAY' },
   });
 });
 

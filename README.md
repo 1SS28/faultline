@@ -126,7 +126,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.
 - `site/`: public product page, deployable to Vercel as static files.
-- `infra/`: AWS setup as CDK code: a private network, RDS PostgreSQL, an SQS job queue and a Lambda worker.
+- `infra/`: AWS setup as CDK code: a private network, RDS PostgreSQL, an SQS job queue, a Lambda worker and an API Gateway API.
 - `tests/`: behavioral, database, and API tests.
 - `docs/ROADMAP.md`: next milestones and the intended AWS architecture.
 - `docs/STATUS.md`: what works, what isn't verified, and known gaps.

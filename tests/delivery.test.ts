@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { runScenario } from '../src/core/runner.js';
 import { connectDatabase, type Database } from '../src/db/database.js';
 import { RunStore } from '../src/db/store.js';
-import { parseJobInput, processDelivery, RetryLater } from '../src/jobs/delivery.js';
+import { deliveryKey, parseJobInput, processDelivery, RetryLater } from '../src/jobs/delivery.js';
 import type { Executor } from '../src/jobs/executor.js';
 import { JobStore } from '../src/jobs/store.js';
 
@@ -25,6 +25,7 @@ test('a message delivered twice runs the fixture once', async () => {
   assert.equal(again.id, first.id);
   assert.equal(again.runId, first.runId);
   assert.equal((await runs.list()).length, 1);
+  assert.equal((await jobs.getByIdempotencyKey(deliveryKey('message-1')))?.id, first.id);
   // The naive agent refunds twice when the reply is lost, so the run itself fails.
   assert.equal((await runs.get(first.runId!))!.status, 'failed');
 });

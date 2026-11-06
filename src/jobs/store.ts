@@ -42,6 +42,10 @@ export class JobStore {
       })) };
     });
   }
+  async getByIdempotencyKey(key: string): Promise<JobDetail | undefined> {
+    const { rows: [row] } = await this.db.query('SELECT id FROM jobs WHERE idempotency_key = $1', [key]);
+    return row ? this.get(String(row.id)) : undefined;
+  }
   async list(limit = 50): Promise<Job[]> {
     return (await this.db.query(`SELECT ${fields} FROM jobs ORDER BY created_at DESC, id DESC LIMIT $1`, [limit])).rows.map(asJob);
   }

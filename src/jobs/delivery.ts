@@ -23,13 +23,16 @@ export function parseJobInput(body: string): JobInput {
 
 const finished = (job: Job) => job.status === 'completed' || job.status === 'errored';
 
+/** The idempotency key of the job created for a queue message, so the message ID can find it later. */
+export const deliveryKey = (messageId: string) => `message:${messageId}`;
+
 /**
  * Handles one message from an at-least-once queue such as SQS. The message ID becomes the job's
  * idempotency key, so a message delivered twice finds the job it already created instead of
  * running the fixture again.
  */
 export async function processDelivery(jobs: JobStore, input: JobInput, messageId: string, execute = executeInProcess): Promise<Job> {
-  const { job } = await jobs.enqueue(input, `message:${messageId}`);
+  const { job } = await jobs.enqueue(input, deliveryKey(messageId));
   if (!finished(job)) {
     const claim = await jobs.claim(30_000, job.id);
     if (claim) await new JobWorker(jobs, execute).process(claim);

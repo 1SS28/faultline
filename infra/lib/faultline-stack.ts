@@ -1,6 +1,8 @@
 import * as path from 'node:path';
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -8,6 +10,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
+import { scenarios, strategies } from '../../src/core/types.js';
 
 const repoRoot = path.join(__dirname, '..', '..');
 
@@ -18,6 +21,7 @@ export class FaultlineStack extends Stack {
   readonly queue: sqs.Queue;
   readonly deadLetterQueue: sqs.Queue;
   readonly worker: nodejs.NodejsFunction;
+  readonly api: apigateway.RestApi;
 
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -86,13 +90,7 @@ export class FaultlineStack extends Stack {
       deadLetterQueue: { queue: this.deadLetterQueue, maxReceiveCount: 5 },
     });
 
-    const workerSecurityGroup = new ec2.SecurityGroup(this, 'WorkerSecurityGroup', {
-      vpc: this.vpc,
-      description: 'Faultline worker',
-      allowAllOutbound: false,
-    });
-
-    // The worker has no internet access, so it reads the database password through a private
+    // The functions have no internet access, so they read the database password through a private
     // connection to Secrets Manager. One availability zone is enough here and halves the cost.
     const secretsEndpoint = this.vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
@@ -100,56 +98,131 @@ export class FaultlineStack extends Stack {
       open: false,
     });
 
-    this.worker = new nodejs.NodejsFunction(this, 'Worker', {
-      entry: path.join(repoRoot, 'infra/functions/worker.mts'),
-      // The worker imports the app's own job code from src/, so it bundles from the repo root.
-      projectRoot: repoRoot,
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      runtime: lambda.Runtime.NODEJS_24_X,
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 256,
-      timeout: Duration.seconds(30),
-      vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [workerSecurityGroup],
-      environment: { DATABASE_SECRET_ARN: databaseSecret.secretArn },
-      logGroup: new logs.LogGroup(this, 'WorkerLogs', {
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy: RemovalPolicy.DESTROY,
-      }),
-      bundling: {
-        format: nodejs.OutputFormat.ESM,
-        mainFields: ['module', 'main'],
-        // The Postgres driver is CommonJS and calls require(), which an ES module bundle has to provide.
-        banner: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
-        // The AWS SDK comes with the Lambda runtime. The others are never loaded on the server.
-        externalModules: ['@aws-sdk/*', 'pg-native', '@electric-sql/pglite'],
-        commandHooks: {
-          beforeBundling: () => [],
-          beforeInstall: () => [],
-          // The migrations, and the certificates that prove the database is really Amazon RDS in us-east-2.
-          afterBundling: (inputDir, outputDir) => [
-            `cp -R "${inputDir}/sql" "${outputDir}/sql"`,
-            `cp "${inputDir}/infra/functions/rds-ca-us-east-2.pem" "${outputDir}/rds-ca.pem"`,
-          ],
+    // Each function gets its own firewall that can reach only the database and Secrets Manager,
+    // and permission to read only the database password.
+    const privateFunction = (id: string, entry: string, description: string, timeout: Duration) => {
+      const securityGroup = new ec2.SecurityGroup(this, `${id}SecurityGroup`, { vpc: this.vpc, description, allowAllOutbound: false });
+      const fn = new nodejs.NodejsFunction(this, id, {
+        entry: path.join(repoRoot, 'infra/functions', entry),
+        // The functions import the app's own code from src/, so they bundle from the repo root.
+        projectRoot: repoRoot,
+        depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.ARM_64,
+        memorySize: 256,
+        timeout,
+        vpc: this.vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        securityGroups: [securityGroup],
+        environment: { DATABASE_SECRET_ARN: databaseSecret.secretArn },
+        logGroup: new logs.LogGroup(this, `${id}Logs`, {
+          retention: logs.RetentionDays.ONE_WEEK,
+          removalPolicy: RemovalPolicy.DESTROY,
+        }),
+        bundling: {
+          format: nodejs.OutputFormat.ESM,
+          mainFields: ['module', 'main'],
+          // The Postgres driver is CommonJS and calls require(), which an ES module bundle has to provide.
+          banner: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+          // The AWS SDK comes with the Lambda runtime. The others are never loaded on the server.
+          externalModules: ['@aws-sdk/*', 'pg-native', '@electric-sql/pglite'],
+          commandHooks: {
+            beforeBundling: () => [],
+            beforeInstall: () => [],
+            // The migrations, and the certificates that prove the database is really Amazon RDS in us-east-2.
+            afterBundling: (inputDir, outputDir) => [
+              `cp -R "${inputDir}/sql" "${outputDir}/sql"`,
+              `cp "${inputDir}/infra/functions/rds-ca-us-east-2.pem" "${outputDir}/rds-ca.pem"`,
+            ],
+          },
         },
-      },
-    });
+      });
+      databaseSecret.grantRead(fn);
+      this.database.connections.allowDefaultPortFrom(securityGroup, `${description} to Postgres`);
+      secretsEndpoint.connections.allowDefaultPortFrom(securityGroup, `${description} to Secrets Manager`);
+      return fn;
+    };
 
+    this.worker = privateFunction('Worker', 'worker.mts', 'Faultline worker', Duration.seconds(30));
     this.worker.addEventSource(new SqsEventSource(this.queue, {
       batchSize: 5,
       reportBatchItemFailures: true,
       // At most two workers at once, which also keeps connections to the small database low.
       maxConcurrency: 2,
     }));
-    databaseSecret.grantRead(this.worker);
-    this.database.connections.allowDefaultPortFrom(workerSecurityGroup, 'Worker to Postgres');
-    secretsEndpoint.connections.allowDefaultPortFrom(workerSecurityGroup, 'Worker to Secrets Manager');
+
+    // The HTTP API. Every request needs an API key. POST /jobs goes straight from API Gateway to
+    // the queue with no function in between, and the GET routes read results from the database.
+    this.api = new apigateway.RestApi(this, 'Api', {
+      description: 'Faultline jobs and runs',
+      endpointTypes: [apigateway.EndpointType.REGIONAL],
+      deployOptions: { stageName: 'v1', throttlingRateLimit: 5, throttlingBurstLimit: 10 },
+      defaultMethodOptions: { apiKeyRequired: true },
+      cloudWatchRole: false,
+    });
+
+    // API Gateway rejects a malformed body before it reaches the queue. The lists come from the
+    // app's own code, so a new scenario is accepted as soon as it exists.
+    const jobRequest = this.api.addModel('JobRequest', {
+      contentType: 'application/json',
+      schema: {
+        schema: apigateway.JsonSchemaVersion.DRAFT4,
+        type: apigateway.JsonSchemaType.OBJECT,
+        required: ['scenario', 'strategy'],
+        additionalProperties: false,
+        properties: {
+          scenario: { type: apigateway.JsonSchemaType.STRING, enum: [...scenarios] },
+          strategy: { type: apigateway.JsonSchemaType.STRING, enum: [...strategies] },
+        },
+      },
+    });
+    const queueRole = new iam.Role(this, 'ApiQueueRole', { assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com') });
+    this.queue.grantSendMessages(queueRole);
+    const jobs = this.api.root.addResource('jobs');
+    jobs.addMethod('POST', new apigateway.AwsIntegration({
+      service: 'sqs',
+      path: `${this.account}/${this.queue.queueName}`,
+      integrationHttpMethod: 'POST',
+      options: {
+        credentialsRole: queueRole,
+        // Anything that isn't JSON is refused instead of being passed to the queue unchecked.
+        passthroughBehavior: apigateway.PassthroughBehavior.NEVER,
+        requestParameters: { 'integration.request.header.Content-Type': "'application/x-www-form-urlencoded'" },
+        requestTemplates: { 'application/json': 'Action=SendMessage&MessageBody=$util.urlEncode($input.body)' },
+        integrationResponses: [
+          { statusCode: '202', responseTemplates: { 'application/json': `{"id": "$input.path('$.SendMessageResponse.SendMessageResult.MessageId')"}` } },
+          { statusCode: '500', selectionPattern: '[45]\\d{2}', responseTemplates: { 'application/json': '{"error": "The job could not be queued"}' } },
+        ],
+      },
+    }), {
+      requestValidator: new apigateway.RequestValidator(this, 'JobRequestValidator', { restApi: this.api, validateRequestBody: true }),
+      requestModels: { 'application/json': jobRequest },
+      methodResponses: [{ statusCode: '202' }, { statusCode: '500' }],
+    });
+
+    const reader = privateFunction('ApiReader', 'api.mts', 'Faultline API reader', Duration.seconds(10));
+    const read = new apigateway.LambdaIntegration(reader, { allowTestInvoke: false });
+    jobs.addResource('{id}').addMethod('GET', read);
+    const runs = this.api.root.addResource('runs');
+    runs.addMethod('GET', read);
+    runs.addResource('{id}').addMethod('GET', read);
+    this.api.root.addResource('summary').addMethod('GET', read);
+
+    // Each key is limited separately from the stage-wide limit above.
+    const apiKey = this.api.addApiKey('ApiKey', { description: 'Faultline default key' });
+    const usagePlan = this.api.addUsagePlan('UsagePlan', {
+      throttle: { rateLimit: 2, burstLimit: 5 },
+      quota: { limit: 1000, period: apigateway.Period.DAY },
+    });
+    usagePlan.addApiKey(apiKey);
+    usagePlan.addApiStage({ stage: this.api.deploymentStage });
 
     new CfnOutput(this, 'DatabaseHost', { value: this.database.dbInstanceEndpointAddress });
     new CfnOutput(this, 'DatabaseSecretName', { value: databaseSecret.secretName });
     new CfnOutput(this, 'QueueUrl', { value: this.queue.queueUrl });
     new CfnOutput(this, 'DeadLetterQueueUrl', { value: this.deadLetterQueue.queueUrl });
     new CfnOutput(this, 'WorkerLogGroup', { value: this.worker.logGroup.logGroupName });
+    new CfnOutput(this, 'ApiUrl', { value: this.api.url });
+    new CfnOutput(this, 'ApiKeyId', { value: apiKey.keyId });
   }
 }
