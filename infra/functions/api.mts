@@ -23,6 +23,7 @@ export function createHandler(stores: () => Promise<Stores>) {
           return run ? json(200, run) : json(404, { error: 'Run not found' });
         }
         case 'GET /summary': return json(200, { summary: await runs.summary() });
+        case 'GET /regressions': return json(200, { regressions: await runs.regressions() });
         // The ID is the one POST /jobs returned, which is the SQS message ID.
         case 'GET /jobs/{id}': {
           const job = await jobs.getByIdempotencyKey(deliveryKey(id!));

@@ -75,7 +75,7 @@ test('both functions run on Node 24 and Graviton inside the private network', ()
 
 test('every API route needs an API key', () => {
   const methods = Object.values(template.findResources('AWS::ApiGateway::Method'));
-  assert.equal(methods.length, 5);
+  assert.equal(methods.length, 6);
   for (const method of methods) assert.equal(method.Properties.ApiKeyRequired, true);
 });
 

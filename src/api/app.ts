@@ -53,5 +53,6 @@ export function createApp(store: RunStore) {
     return run ?? reply.code(404).send({ error: 'Run not found' });
   });
   app.get('/api/summary', async () => ({ summary: await store.summary() }));
+  app.get('/api/regressions', async () => ({ regressions: await store.regressions() }));
   return app;
 }

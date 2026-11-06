@@ -2,6 +2,16 @@ import { readFile } from 'node:fs/promises';
 import type { Database, Sql } from './database.js';
 import type { Run } from '../core/types.js';
 
+export interface Regression {
+  scenario: string;
+  previousVersion: string;
+  agentVersion: string;
+  previousPassRate: number;
+  previousRuns: number;
+  passRate: number;
+  runs: number;
+}
+
 export class RunStore {
   constructor(readonly db: Database) {}
   /** Applies the SQL migrations. A bundled deployment passes the folder it copied them to. */
@@ -50,6 +60,29 @@ export class RunStore {
   async list(limit = 20) {
     return (await this.db.query(`SELECT id, scenario, agent_version AS "agentVersion", started_at AS "startedAt",
       duration_ms AS "durationMs", status, metadata FROM runs ORDER BY started_at DESC, id DESC LIMIT $1`, [limit])).rows;
+  }
+  /**
+   * Scenarios where an agent version passes less often than the version first tested before it.
+   * Versions are ordered by their first run anywhere, so a new prompt or model is compared with
+   * whatever came before it, scenario by scenario.
+   */
+  async regressions(): Promise<Regression[]> {
+    return (await this.db.query(`WITH rates AS (
+        SELECT agent_version, scenario, COUNT(*)::int AS runs,
+          COUNT(*) FILTER (WHERE status = 'passed')::int AS passed,
+          MIN(MIN(started_at)) OVER (PARTITION BY agent_version) AS introduced_at
+        FROM runs GROUP BY agent_version, scenario
+      ), compared AS (
+        SELECT *, LAG(agent_version) OVER by_scenario AS previous_version,
+          LAG(runs) OVER by_scenario AS previous_runs, LAG(passed) OVER by_scenario AS previous_passed
+        FROM rates WINDOW by_scenario AS (PARTITION BY scenario ORDER BY introduced_at, agent_version)
+      )
+      SELECT scenario, previous_version AS "previousVersion", agent_version AS "agentVersion",
+        ROUND(100.0 * previous_passed / previous_runs, 1)::float AS "previousPassRate", previous_runs AS "previousRuns",
+        ROUND(100.0 * passed / runs, 1)::float AS "passRate", runs
+      FROM compared
+      WHERE previous_version IS NOT NULL AND passed * previous_runs < previous_passed * runs
+      ORDER BY introduced_at DESC, scenario`)).rows as unknown as Regression[];
   }
   async summary() {
     return (await this.db.query(`SELECT agent_version AS "agentVersion", scenario, COUNT(*)::int AS runs,

@@ -55,3 +55,8 @@ test('SQL summary reports evidence-based pass rates', async () => {
   assert.equal(row.failures, 1);
   assert.equal(row.passRate, 0);
 });
+test('API reports regressions from the same query as the CLI', async () => {
+  const response = await app.inject({ method: 'GET', url: '/api/regressions' });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().regressions, await store.regressions());
+});

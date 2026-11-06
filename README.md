@@ -2,7 +2,7 @@
 
 Crash tests for AI agent tool workflows. Inject a failure, inspect the actual side effects, and turn the failure into a repeatable regression test.
 
-Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. A small SDK adds the same faults to your own agent's tools. Nothing is deployed to AWS.
+Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. A small SDK adds the same faults to your own agent's tools. A learning deployment in `infra/` runs the same job code on AWS with Lambda, SQS and RDS.
 
 ## Run the demo
 
@@ -51,10 +51,11 @@ npm run faultline -- run rate-limit resilient
 npm run faultline -- run malformed-response naive
 npm run faultline -- history
 npm run faultline -- summary
+npm run faultline -- regressions
 npm start
 ```
 
-A single `run` exits 1 on a detected regression, 0 on success, and 2 for invalid arguments. The deliberately broken fixture should fail. `npm run demo` compares two agents, so its exit semantics differ.
+A single `run` exits 1 on a detected regression, 0 on success, and 2 for invalid arguments. The deliberately broken fixture should fail. `npm run demo` compares two agents, so its exit semantics differ. `regressions` lists scenarios where an agent version passes less often than the version first tested before it, and exits 1 if there are any, so CI can use it as a gate.
 
 Scenarios: `baseline`, `timeout-after-commit`, `rate-limit`, `malformed-response`.
 
@@ -76,6 +77,7 @@ curl -s http://127.0.0.1:4310/api/summary
 - `GET /api/runs`: latest 50 runs.
 - `GET /api/runs/:id`: full trace, ledger, and assertions.
 - `GET /api/summary`: SQL aggregation of pass rates by scenario and agent version.
+- `GET /api/regressions`: scenarios where an agent version passes less often than the version before it, found with SQL window functions.
 
 The dashboard goes through the durable queue instead:
 
@@ -94,7 +96,7 @@ docker compose up -d db
 DATABASE_URL=postgresql://faultline:faultline@localhost:5432/faultline npm run demo
 ```
 
-The Compose service is for local development only. The container and server-PostgreSQL paths haven't been executed yet, and every database test so far runs against embedded PostgreSQL.
+The Compose service is for local development only and hasn't been run yet. Server PostgreSQL has: the AWS worker and API in `infra/` run against RDS. Every automated database test runs against embedded PostgreSQL.
 
 `sql/001_initial.sql` defines normalized runs, events, assertions, and refund evidence, with foreign keys, indexes, and a unique constraint on each run's idempotency keys. Saving a run is atomic. `src/db/store.ts` holds the parameterized queries and the pass-rate aggregation.
 

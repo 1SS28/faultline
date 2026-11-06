@@ -18,7 +18,7 @@ Only the worker and the read function can reach the database and the password, a
 
 SQS can deliver the same message twice. The worker uses the message ID as the job's idempotency key, so a second delivery finds the existing job instead of running the trial again.
 
-Still to come: a query that flags agent versions whose pass rate dropped. Live model runs stay on your laptop, so no model API key is ever stored in AWS.
+Live model runs stay on your laptop, so no model API key is ever stored in AWS.
 
 ## Cost
 
@@ -93,7 +93,7 @@ A second later, read the job and its run with that ID. The naive agent refunds t
 curl -s <ApiUrl>jobs/<id> -H "x-api-key: <key>"
 ```
 
-`GET /runs` lists recent runs, `GET /runs/<runId>` returns one with its full trace, and `GET /summary` gives pass rates by agent and scenario.
+`GET /runs` lists recent runs, `GET /runs/<runId>` returns one with its full trace, and `GET /summary` gives pass rates by agent and scenario. `GET /regressions` lists scenarios where an agent version passes less often than the version first tested before it.
 
 The worker's log shows each trial as it runs, using the `WorkerLogGroup` the deploy printed.
 

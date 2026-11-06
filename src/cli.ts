@@ -12,8 +12,8 @@ function display(run: Run) {
   console.log(`  Ledger: ${run.refunds.length} refund(s), $${(run.refunds.reduce((sum, refund) => sum + refund.amountCents, 0) / 100).toFixed(2)}`);
 }
 const [command = 'help', scenarioArg, strategyArg] = process.argv.slice(2);
-if (!['demo', 'run', 'history', 'summary'].includes(command)) {
-  console.log('Faultline: crash tests for agent tool workflows\n\n  npm run demo\n  npm run faultline -- run <scenario> <naive|resilient>\n  npm run faultline -- history\n  npm run faultline -- summary\n\nScenarios: ' + scenarios.join(', '));
+if (!['demo', 'run', 'history', 'summary', 'regressions'].includes(command)) {
+  console.log('Faultline: crash tests for agent tool workflows\n\n  npm run demo\n  npm run faultline -- run <scenario> <naive|resilient>\n  npm run faultline -- history\n  npm run faultline -- summary\n  npm run faultline -- regressions\n\nScenarios: ' + scenarios.join(', '));
   if (command !== 'help') process.exitCode = 2;
 } else if (command === 'run' && (!scenarios.includes(scenarioArg as Scenario) || !strategies.includes(strategyArg as Strategy))) {
   console.error('Specify a valid scenario and strategy. Run npm run faultline for help.');
@@ -25,6 +25,13 @@ if (!['demo', 'run', 'history', 'summary'].includes(command)) {
     await store.migrate();
     if (command === 'history') console.table(await store.list());
     else if (command === 'summary') console.table(await store.summary());
+    else if (command === 'regressions') {
+      const regressions = await store.regressions();
+      if (regressions.length) console.table(regressions);
+      else console.log('No regressions. No agent version passes a scenario less often than the version before it.');
+      // Exits 1 when something regressed, so CI can use this as a gate.
+      process.exitCode = regressions.length ? 1 : 0;
+    }
     else {
       const runs: Run[] = [];
       for (const strategy of command === 'demo' ? strategies : [strategyArg as Strategy]) {

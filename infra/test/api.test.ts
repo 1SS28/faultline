@@ -40,9 +40,10 @@ test('a job still in the queue is not found yet', async () => {
   assert.match(body.error, /waiting in the queue/);
 });
 
-test('lists and the summary read from the database', async () => {
+test('lists, the summary and regressions read from the database', async () => {
   assert.ok((await get('/runs')).body.runs.length >= 1);
   assert.ok(Array.isArray((await get('/summary')).body.summary));
+  assert.ok(Array.isArray((await get('/regressions')).body.regressions));
 });
 
 test('IDs must be UUIDs and unknown routes are 404s', async () => {

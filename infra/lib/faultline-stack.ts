@@ -212,6 +212,7 @@ export class FaultlineStack extends Stack {
     runs.addMethod('GET', read);
     runs.addResource('{id}').addMethod('GET', read);
     this.api.root.addResource('summary').addMethod('GET', read);
+    this.api.root.addResource('regressions').addMethod('GET', read);
 
     // Each key is limited separately from the stage-wide limit above.
     const apiKey = this.api.addApiKey('ApiKey', { description: 'Faultline default key' });

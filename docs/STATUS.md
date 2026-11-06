@@ -17,9 +17,9 @@
 ## Not verified
 
 - No live model call has happened. Both adapters are only tested against simulated responses. The first paid run needs a local API key, a selected model, and `--accept-costs`. See LIVE-EVALUATION.md.
-- No team outside this project has used the SDK. It is packaged but not yet published to npm, and its results don't appear in the dashboard.
-- Docker, networked PostgreSQL, and parallel workers against a real PostgreSQL server are unrun. Existing concurrency tests use the embedded engine's single connection.
-- No AWS resources exist.
+- No team outside this project has used the SDK. It is published on npm as `faultline-sdk`, and its results don't appear in the dashboard.
+- Docker is unrun. Networked PostgreSQL has run, since the AWS worker and API use RDS, but workers competing for the same jobs on a real server haven't been tested. Existing concurrency tests use the embedded engine's single connection.
+- The AWS deployment in `infra/` runs fixture trials only. Live model runs stay local, and deploys are manual. See `infra/README.md`.
 
 ## Known gaps
 
@@ -27,7 +27,7 @@
 - Live evaluations run through the CLI, separately from the fixture queue. An interrupted live trial keeps the usage metadata known at that point but loses its partial tool trace.
 - `src/billing/store.ts` and `sql/004_billing.sql` are unreferenced. The schema gets applied on migration, but nothing calls the store and nothing tests it. Either wire it into the evaluation CLI or drop it.
 - The `workflow-recovered` assertion treats escalation as a failure in every scenario. That holds for the four current faults, but a fault where escalation is the correct outcome will need a per-scenario expectation.
-- Authentication, tenant isolation, SQS/Fargate deployment, and outside validation are all still open.
+- The AWS API has one shared API key. Per-user authentication, tenant isolation, container deployment, and outside validation are still open.
 
 ## Running locally
 
