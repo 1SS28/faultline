@@ -1,1 +1,3 @@
 cdk.out/
+# Amazon RDS public root certificates, not a private key. Overrides a global *.pem ignore.
+!functions/rds-ca-us-east-2.pem
