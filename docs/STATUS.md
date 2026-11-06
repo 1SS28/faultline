@@ -17,7 +17,7 @@
 
 ## Not verified
 
-- Only one live model has run. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On `timeout-no-key` it escalated in 10 of 10 trials with the baseline prompt, and refunded twice in 10 of 10 with the recovery prompt. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
+- Only one live model has run. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On `timeout-no-key` it escalated in 10 of 10 trials with the baseline prompt, and refunded twice in 10 of 10 with the recovery prompt. After the recovery prompt was fixed, it passed 30 of 30 across all five scenarios. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
 - No team outside this project has used the SDK. It is published on npm as `faultline-sdk`, and its results don't appear in the dashboard.
 - Docker is unrun. Networked PostgreSQL has run, since the AWS worker and API use RDS, but workers competing for the same jobs on a real server haven't been tested. Existing concurrency tests use the embedded engine's single connection.
 - The AWS deployment in `infra/` runs fixture trials only. Live model runs stay local, and deploys are manual. See `infra/README.md`.

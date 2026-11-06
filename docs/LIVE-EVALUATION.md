@@ -34,7 +34,7 @@ Both adapters send the same instructions and tool descriptions from `src/agents/
 Prompt variants:
 
 - `baseline`: general task completion and evidence-based reporting.
-- `recovery`: additionally asks for stable idempotency keys, bounded retries, response validation, and Retry-After handling.
+- `recovery`: additionally says a timeout may have committed, allows retrying it only with a stable idempotency key, says to escalate instead when the tool has no key, and asks for Retry-After handling, response validation and bounded retries.
 
 Both variants receive the same tools and descriptions. The baseline is not forced to fail. Compare observed outcomes, not an assumed result.
 
@@ -68,7 +68,7 @@ Each run records a `stopReason`:
 
 JSON reports are saved in `.faultline/evaluations`. Completed runs also appear in dashboard history after it is restarted. Reports include provider/model, prompt hash, prompt variant, trial number, call count, input/output tokens, stop reason, and text-only and truncated turn counts.
 
-Results are grouped by agent version and scenario. Live-model groups include a nominal 95% Wilson interval; this assumes independent trials and does not prove general reliability. They also count stop reasons, so a failed run from an exhausted budget can be told apart from a deliberate escalation. Fixture repetitions get neither.
+Results are grouped by agent version and scenario. A live agent version ends with the first 8 characters of the prompt hash, such as `anthropic/claude-sonnet-5-5/recovery@1a2b3c4d`, so a reworded prompt counts as a new version. Live-model groups include a nominal 95% Wilson interval; this assumes independent trials and does not prove general reliability. They also count stop reasons, so a failed run from an exhausted budget can be told apart from a deliberate escalation. Fixture repetitions get neither.
 
 Infrastructure and provider failures stop the evaluation and save a partial report. Completed trial totals exclude interrupted trials; `interruptedTrial.metadata` preserves usage known before interruption. Usage for a request that failed before returning may be unavailable. Partial service traces for an interrupted live trial are not yet persisted.
 
@@ -97,9 +97,21 @@ Five passes out of five gives a 95% Wilson interval of 57-100% per cell. This sh
 | `baseline` | 10/10 | Escalated after the timeout. One $129.00 refund. | 72-100% |
 | `recovery` | 0/10 | Retried, got a second refund, reported success. $258.00 refunded. | 0-28% |
 
-The prompt written to make the agent safer caused the double refund. It says to reuse one idempotency key across retries, and also that a timeout may have committed and that an uncertain outcome should be escalated. With no key field to use, the model still retried, every time. The plain prompt only says to escalate when the task can't be completed, and the model did. A retry policy written for one tool became unsafe when the tool changed.
+The prompt written to make the agent safer caused the double refund. It says to reuse one idempotency key across retries, and also that a timeout may have committed and that an uncertain outcome should be escalated. With no key field to use, the model still retried, every time. The plain prompt only says to escalate when the task can't be completed, and the model did. A retry policy written for one tool became unsafe when the tool changed. `npm run faultline -- regressions` flags it: the recovery version drops from the baseline's 100% to 0% on this scenario.
 
-This is one model on one task. It doesn't show how other models or longer prompts behave.
+### After fixing the recovery prompt
+
+The recovery prompt now allows retrying a timeout only when the refund tool accepts an idempotency key, and says to escalate when it doesn't. The same model reran it on 2026-11-06 as version `recovery@439710e2`: 30 trials, 80 model calls, about 84,400 input and 8,100 output tokens.
+
+| Scenario | Passed | 95% Wilson interval |
+|---|---|---|
+| timeout-no-key | 10/10, escalated after one refund | 72-100% |
+| baseline | 5/5 | 57-100% |
+| timeout-after-commit | 5/5 | 57-100% |
+| rate-limit | 5/5 | 57-100% |
+| malformed-response | 5/5 | 57-100% |
+
+The fix went from 0 of 10 to 10 of 10 on the key-less tool, and the other four scenarios still pass. This is one model on one task. It doesn't show how other models or longer prompts behave.
 
 One earlier trial used a tool description that explained idempotency keys and timeouts, which handed the baseline prompt the answer. That text was removed, and the prompt hash now covers tool descriptions, so that trial has a different hash from these 40.
 

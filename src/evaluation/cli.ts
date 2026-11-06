@@ -60,7 +60,8 @@ try {
     if (newAdapter) {
       const adapter = newAdapter();
       interruptedTrial = { scenario, trial, metadata: adapter.metadata };
-      run = await runAgent(scenario, `${values.provider}/${model}/${values.prompt}`, adapter.agent);
+      // the hash suffix makes a reworded prompt a new version instead of merging with the old one's results
+      run = await runAgent(scenario, `${values.provider}/${model}/${values.prompt}@${adapter.metadata.promptHash!.slice(0, 8)}`, adapter.agent);
       run.metadata = { ...adapter.metadata, evaluationId, trial };
     } else {
       run = await runScenario({ scenario, strategy: values.agent as Strategy });
