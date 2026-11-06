@@ -18,7 +18,7 @@ Only the worker and the read function can reach the database and the password, a
 
 SQS can deliver the same message twice. The worker uses the message ID as the job's idempotency key, so a second delivery finds the existing job instead of running the trial again.
 
-Still to come: deploys from GitHub Actions, and a query that flags agent versions whose pass rate dropped. Live model runs stay on your laptop, so no model API key is ever stored in AWS.
+Still to come: a query that flags agent versions whose pass rate dropped. Live model runs stay on your laptop, so no model API key is ever stored in AWS.
 
 ## Cost
 
@@ -52,6 +52,8 @@ npx cdk synth
 `npm run check` type checks the code and runs the tests in `test/`. `cdk synth` bundles the functions and writes the template to `cdk.out/`, so you can read exactly what would be created.
 
 ## Deploy
+
+GitHub Actions type checks, tests and synthesizes this stack on every push, but deploys are run by hand. This account was created through AWS's free plan sign-up, which places it in an AWS-managed organization whose policy blocks creating identity providers. GitHub's keyless OIDC sign-in needs one, and the alternative is a long-lived access key in GitHub that can deploy anything, so deploys stay on a laptop signed in with `aws login`.
 
 Deploying creates real resources that cost money. Sign in first, since a session lasts 12 hours.
 
