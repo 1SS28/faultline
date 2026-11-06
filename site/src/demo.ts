@@ -17,6 +17,8 @@ export const scenarios: Array<{ key: Scenario; name: string; question: string; s
     stories: { naive: 'It retried three times without waiting, got blocked every time, and gave up.', resilient: 'It waited the second it was asked to, and the refund went through.' } },
   { key: 'malformed-response', name: 'Broken reply', question: 'The refund goes through, but the reply has no confirmation number. Does the agent check?',
     stories: { naive: 'It reported success with no confirmation number to back it up.', resilient: 'It noticed the missing confirmation, asked again with the same request ID, and got the original refund back.' } },
+  { key: 'timeout-no-key', name: 'No request ID', question: 'The refund goes through and the reply is lost, but this service has no request IDs. Does the agent stop instead of paying twice?',
+    stories: { naive: 'The refund went through but the reply was lost. It tried again and refunded the customer a second time.', resilient: 'Without a request ID it could not retry safely, so it stopped after one try and passed the refund to a person to check.' } },
   { key: 'baseline', name: 'Nothing breaks', question: 'Everything works normally. Both agents should finish the same task.',
     stories: { naive: 'Nothing went wrong, so it refunded once and finished.', resilient: 'Nothing went wrong, so it refunded once and finished.' } },
 ];

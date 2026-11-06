@@ -49,21 +49,20 @@ export function App({ initial }: { initial?: Pair }) {
           <div className="sheet">
             <h3 className="sheet-tab ok">Works today</h3>
             <ul className="checklist done">
-              <li>Three failure scenarios on a simulated refund service</li>
+              <li>Four failure scenarios on a simulated refund service</li>
               <li>Checks based on what the service actually recorded</li>
               <li>A dashboard to compare agents run by run</li>
               <li>A command you can add to your CI pipeline</li>
-              <li>Adapters for testing Claude and OpenAI models</li>
-              <li>A library that adds the same faults to your own agent's tools</li>
+              <li>Live tests of a Claude model, and an adapter for OpenAI models</li>
+              <li>An npm package that adds the same faults to your own agent's tools</li>
             </ul>
           </div>
           <div className="sheet">
             <h3 className="sheet-tab">Not yet</h3>
             <ul className="checklist">
-              <li>Tested against a live AI model</li>
+              <li>A live test of an OpenAI model</li>
               <li>Used by a team outside the project</li>
               <li>Faults in real network traffic</li>
-              <li>Published as a package you can install</li>
               <li>A hosted version, or safe running of code you don't trust</li>
             </ul>
           </div>
@@ -75,7 +74,7 @@ export function App({ initial }: { initial?: Pair }) {
         <p className="intro">The next goal is to catch a real bug in an agent someone else built.</p>
         <ol className="track">
           <li className="done"><span className="node" aria-hidden="true" /><span className="when">Done</span><h3>Prove it locally</h3><p>The scenarios, dashboard and CI command all work on one machine.</p></li>
-          <li className="next"><span className="node" aria-hidden="true" /><span className="when">Next</span><h3>Test real agents</h3><p>Run live AI models, then give other teams a simple way to plug in their own agent.</p></li>
+          <li className="next"><span className="node" aria-hidden="true" /><span className="when">Next</span><h3>Test real agents</h3><p>Claude has run live. Next come more models and an agent another team built.</p></li>
           <li className="later"><span className="node" aria-hidden="true" /><span className="when">Later</span><h3>Go hosted</h3><p>Sandboxed runs, team accounts and sign-in, hosted in the cloud.</p></li>
         </ol>
       </section>
@@ -86,7 +85,7 @@ export function App({ initial }: { initial?: Pair }) {
         <div className="plans">
           <article className="plan free"><h3>Built-in agents</h3><p className="price">Free</p><p>Everything that runs without an AI model, including all the scenarios and the dashboard.</p></article>
           <article className="plan"><h3>Your own key</h3><p className="price tbd">Price not set</p><p>Test live AI models. Your model provider bills you for usage directly.</p></article>
-          <article className="plan"><h3>Included credits</h3><p className="price tbd">Price not set</p><p>Faultline covers model costs at one credit per trial. Unused credits come back to you.</p></article>
+          <article className="plan"><h3>Included credits</h3><p className="price tbd">Price not set</p><p>The plan is for Faultline to cover model costs at one credit per trial and refund unused credits.</p></article>
         </div>
       </section>
     </main>
@@ -94,6 +93,7 @@ export function App({ initial }: { initial?: Pair }) {
       <div className="wrap">
         <a className="brand" href="#top"><span className="mark"><Zap size={15} fill="currentColor" aria-hidden="true" /></span>faultline</a>
         <span>Crash tests for AI agents · Private preview</span>
+        <p className="legal">Open source under the Apache 2.0 license and provided as is, without warranty. Not affiliated with or endorsed by Anthropic or OpenAI. Claude is a trademark of Anthropic and OpenAI is a trademark of OpenAI. This site sets no cookies and runs no analytics.</p>
       </div>
     </footer>
   </>;
@@ -208,7 +208,7 @@ function Report({ name, story, run }: { name: string; story: string; run: Run })
       <span className="verdict" key={run.id}>{run.status === 'passed' ? 'Pass' : 'Fail'}</span>
     </div>
     <dl className="facts">
-      <div><dt>Agent said</dt><dd className="said" key={run.id}>{run.result.status === 'completed' ? 'Done' : 'Gave up'}</dd></div>
+      <div><dt>Agent said</dt><dd className="said" key={run.id}>{run.result.status === 'completed' ? 'Done' : 'Escalated'}</dd></div>
       <div><dt>Customer got</dt><dd className={`amount ${total > authorizedCents ? 'bad' : ''}`} key={run.id}>{money(total)}</dd><dd className="sub">{count === 0 ? 'No refund' : count === 1 ? '1 refund' : `${count} refunds`}</dd></div>
     </dl>
     <p className="story">{story}</p>

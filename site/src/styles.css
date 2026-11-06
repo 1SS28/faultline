@@ -4,9 +4,9 @@
   --paper: #f2f3ef; --sheet: #ffffff; --ink: #0c0c0b; --ink-2: #4a4c45; --line: #d7d9d1; --hover: #e6e7e1;
   --yellow: #ffd000; --yellow-soft: #fff4c2; --red: #d42a1f; --red-soft: #fdeceb; --green: #0a7c45; --green-soft: #e2f3ea;
   --chamber: #0c0c0b; --chamber-2: #181815; --chamber-line: #2f2f2a; --chamber-ink: #efefe9; --chamber-muted: #a7a79d;
-  --display: 'Archivo', 'Arial Narrow', system-ui, sans-serif;
-  --body: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --mono: 'Martian Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --display: 'Archivo Variable', 'Arial Narrow', system-ui, sans-serif;
+  --body: 'Archivo Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Martian Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* Vertical rhythm: every section is --section apart, every heading sits --lead above its first line. */
   --section: clamp(40px, 5vw, 56px); --lead: 16px; --after-lead: 32px;
   color-scheme: light;
@@ -173,6 +173,7 @@ noscript { display: block; padding: 40px 24px; text-align: center; }
 footer { margin-top: var(--section); background: var(--chamber); color: var(--chamber-muted); }
 footer .wrap { padding-block: 40px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 32px; font-size: .92rem; }
 footer .brand { color: var(--chamber-ink); }
+footer .legal { flex-basis: 100%; max-width: 72ch; font-size: .8rem; line-height: 1.5; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
