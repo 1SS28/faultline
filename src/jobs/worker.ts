@@ -1,4 +1,5 @@
 import type { JobStore } from './store.js';
+import type { Claim } from './types.js';
 import { executeFixture, type Executor } from './executor.js';
 
 export class JobWorker {
@@ -26,6 +27,11 @@ export class JobWorker {
   async tick(): Promise<boolean> {
     const claim = await this.jobs.claim();
     if (!claim) return false;
+    await this.process(claim);
+    return true;
+  }
+  /** Executes one claimed job while renewing its lease, then records the run or schedules a retry. */
+  async process(claim: Claim): Promise<void> {
     const controller = new AbortController();
     let renewal: Promise<void> | undefined;
     const heartbeat = setInterval(() => {
@@ -46,7 +52,6 @@ export class JobWorker {
         await this.jobs.fail(claim, error instanceof Error ? error.message : 'Execution failed', Math.min(30_000, 1000 * 2 ** (claim.job.attempts - 1)));
       }
     } finally { clearInterval(heartbeat); }
-    return true;
   }
   async stop() {
     this.stopped = true;

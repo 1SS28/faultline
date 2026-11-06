@@ -4,9 +4,13 @@ import type { Run } from '../core/types.js';
 
 export class RunStore {
   constructor(readonly db: Database) {}
-  async migrate() {
-    const sql = (await Promise.all(['001_initial.sql', '002_jobs.sql', '003_run_metadata.sql', '004_billing.sql'].map(name => readFile(new URL(`../../sql/${name}`, import.meta.url), 'utf8')))).join('\n');
+  /** Applies the SQL migrations. A bundled deployment passes the folder it copied them to. */
+  async migrate(directory = new URL('../../sql/', import.meta.url)) {
+    const sql = (await Promise.all(['001_initial.sql', '002_jobs.sql', '003_run_metadata.sql', '004_billing.sql'].map(name => readFile(new URL(name, directory), 'utf8')))).join('\n');
     await this.db.transaction(async tx => {
+      // Processes that start together, such as two cold-starting workers, take turns instead of
+      // racing to create the same tables.
+      await tx.query('SELECT pg_advisory_xact_lock(4310)');
       // Initial migration contains no procedural blocks or semicolons inside literals.
       for (const statement of sql.split(';').filter(statement => statement.trim())) await tx.query(statement);
     });

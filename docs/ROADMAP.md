@@ -32,7 +32,7 @@ Intended architecture, not deployed:
 - CloudWatch for logs/metrics, IAM task roles, Secrets Manager for credentials.
 - Infrastructure as code, TLS, private database networking, retention policies, and budget alerts.
 
-A low-cost development topology is being built in `infra/` with the AWS CDK. It uses Lambda instead of Fargate and skips the NAT gateway. The private network, RDS PostgreSQL 18 and its Secrets Manager password are deployed in us-east-2. Nothing connects to the database yet, and container execution is not verified.
+A low-cost development topology is being built in `infra/` with the AWS CDK. It uses Lambda instead of Fargate and skips the NAT gateway. The private network, RDS PostgreSQL 18, its Secrets Manager password, an SQS queue with a dead-letter queue, and a Lambda worker that runs fixture trials into RDS are deployed in us-east-2. Container execution is not verified.
 
 ## Validation
 

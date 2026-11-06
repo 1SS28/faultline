@@ -45,7 +45,8 @@ export class JobStore {
   async list(limit = 50): Promise<Job[]> {
     return (await this.db.query(`SELECT ${fields} FROM jobs ORDER BY created_at DESC, id DESC LIMIT $1`, [limit])).rows.map(asJob);
   }
-  async claim(leaseMs = 30_000): Promise<Claim | undefined> {
+  /** Claims the oldest ready job, or only the given job when an ID is passed. */
+  async claim(leaseMs = 30_000, jobId?: string): Promise<Claim | undefined> {
     if (!Number.isInteger(leaseMs) || leaseMs < 100 || leaseMs > 300_000) throw new Error('Invalid lease duration');
     return this.db.transaction(async tx => {
       // Exhausted worker crashes must reach a terminal state, even with no other ready jobs.
@@ -58,7 +59,7 @@ export class JobStore {
         FROM exhausted WHERE job_attempts.job_id = exhausted.id AND job_attempts.attempt = exhausted.attempts`);
       const { rows: [candidate] } = await tx.query(`SELECT id, status, attempts FROM jobs
         WHERE attempts < max_attempts AND ((status = 'queued' AND available_at <= now()) OR (status = 'running' AND lease_until <= now()))
-        ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`);
+        ${jobId ? 'AND id = $1' : ''} ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`, jobId ? [jobId] : []);
       if (!candidate) return undefined;
       if (candidate.status === 'running') await tx.query(`UPDATE job_attempts SET status = 'expired', finished_at = now(),
         error = 'Worker lease expired' WHERE job_id = $1 AND attempt = $2`, [candidate.id, candidate.attempts]);
