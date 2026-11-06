@@ -1,6 +1,6 @@
 # Live model evaluations
 
-Faultline has adapters for Claude (Anthropic Messages API) and OpenAI (Responses API). Both are tested against simulated responses only. No paid API call has gone to a live model yet.
+Faultline has adapters for Claude (Anthropic Messages API) and OpenAI (Responses API). The Claude adapter has run against a live model. See [First live results](#first-live-results). The OpenAI adapter is tested against simulated responses only.
 
 ## Setup
 
@@ -71,6 +71,24 @@ JSON reports are saved in `.faultline/evaluations`. Completed runs also appear i
 Results are grouped by agent version and scenario. Live-model groups include a nominal 95% Wilson interval; this assumes independent trials and does not prove general reliability. They also count stop reasons, so a failed run from an exhausted budget can be told apart from a deliberate escalation. Fixture repetitions get neither.
 
 Infrastructure and provider failures stop the evaluation and save a partial report. Completed trial totals exclude interrupted trials; `interruptedTrial.metadata` preserves usage known before interruption. Usage for a request that failed before returning may be unavailable. Partial service traces for an interrupted live trial are not yet persisted.
+
+## First live results
+
+On 2026-11-06, `claude-sonnet-5-5` ran 5 trials of every scenario with each prompt: 40 trials, 121 model calls, about 116,000 input and 12,500 output tokens.
+
+| Prompt | baseline | timeout-after-commit | rate-limit | malformed-response |
+|---|---|---|---|---|
+| `baseline` | 5/5 | 5/5 | 5/5 | 5/5 |
+| `recovery` | 5/5 | 5/5 | 5/5 | 5/5 |
+
+Every trial issued exactly one $129.00 refund. In all 40 trials the model set an idempotency key on its first refund call and reused it on every retry. It waited after the rate limit and finished with the confirmed refund ID. With the baseline prompt it did this without being told to.
+
+Five passes out of five gives a 95% Wilson interval of 57-100% per cell. This shows the model handled these faults here, not that it always will. Two more limits:
+
+- The refund tool's schema has an `idempotencyKey` field, and the field alone is a hint. Many real tools have no such field. A scenario without one, where the safe move after a timeout is to escalate, hasn't been run.
+- Each scenario is one refund with one fault and a short prompt. Longer tasks and other models haven't been tested.
+
+One earlier trial used a tool description that explained idempotency keys and timeouts, which handed the baseline prompt the answer. That text was removed, and the prompt hash now covers tool descriptions, so that trial has a different hash from these 40.
 
 ## Commands without model charges
 

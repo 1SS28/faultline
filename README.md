@@ -114,7 +114,7 @@ Assertions inspect the ledger independently of whatever the agent claims. They c
 
 Simulation time is virtual: a 1000ms retry delay advances the test clock without sleeping, while `durationMs` records real execution time. The simulator's idempotency behavior assumes the underlying service honors keys with matching semantics, since a client key alone can't make an arbitrary provider idempotent.
 
-These tests establish behavior for the supplied fixtures and failure model, not a general guarantee of agent reliability. The Claude and OpenAI adapters and the repeated-trial CLI work against simulated responses but haven't been verified with paid model calls yet. Arbitrary HTTP fault injection, container isolation, and hosted authentication are still open. See `docs/LIVE-EVALUATION.md`.
+These tests establish behavior for the supplied fixtures and failure model, not a general guarantee of agent reliability. The Claude adapter has run live: `claude-sonnet-5-5` passed all 40 trials across the four scenarios. The OpenAI adapter works against simulated responses but hasn't made a paid call yet. Arbitrary HTTP fault injection, container isolation, and hosted authentication are still open. See `docs/LIVE-EVALUATION.md`.
 
 ## Project map
 

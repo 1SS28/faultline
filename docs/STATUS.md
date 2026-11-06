@@ -16,7 +16,7 @@
 
 ## Not verified
 
-- No live model call has happened. Both adapters are only tested against simulated responses. The first paid run needs a local API key, a selected model, and `--accept-costs`. See LIVE-EVALUATION.md.
+- Only one live model has run: `claude-sonnet-5-5` passed all 40 trials, 5 per scenario with each prompt. The refund tool always offered an idempotency key field, and a scenario without one hasn't been run. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
 - No team outside this project has used the SDK. It is published on npm as `faultline-sdk`, and its results don't appear in the dashboard.
 - Docker is unrun. Networked PostgreSQL has run, since the AWS worker and API use RDS, but workers competing for the same jobs on a real server haven't been tested. Existing concurrency tests use the embedded engine's single connection.
 - The AWS deployment in `infra/` runs fixture trials only. Live model runs stay local, and deploys are manual. See `infra/README.md`.

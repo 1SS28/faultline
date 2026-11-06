@@ -9,8 +9,9 @@ const recoveryPrompt = ' For each logical refund, choose one stable idempotency 
 // Harness turns restate the tool protocol only. Hinting at retries or idempotency here would leak the recovery prompt into the baseline.
 export const continuePrompt = 'Continue the task with a tool call. Call finish when you can report the outcome.';
 export const truncatedPrompt = 'Your previous response hit the output limit. Continue the task with a single tool call.';
+// neutral on purpose: retry and timeout guidance belongs to the recovery prompt only
 export const toolDescriptions = {
-  issue_refund: 'Issue a refund. Repeating a request with the same idempotency key and arguments returns the original refund. A timeout may occur after commit.',
+  issue_refund: 'Issue a refund for an order.',
   wait: 'Wait a number of milliseconds before another action. Uses the simulated clock.',
   finish: 'Report completion with a confirmed refund ID, or escalate if the outcome is uncertain.',
 } as const;
@@ -28,7 +29,8 @@ export function setUpTrial(options: {
   const instructions = basePrompt + (options.promptVariant === 'recovery' ? recoveryPrompt : '');
   const metadata: RunMetadata = {
     provider: options.provider, model: options.model, promptVariant: options.promptVariant,
-    promptHash: createHash('sha256').update(instructions).digest('hex'),
+    // tool text is part of what the model sees, so a changed description is a new fingerprint
+    promptHash: createHash('sha256').update(instructions).update(JSON.stringify(toolDescriptions)).digest('hex'),
     modelCalls: 0, inputTokens: 0, outputTokens: 0, textOnlyTurns: 0, truncatedTurns: 0, maxTurns, maxOutputTokens,
   };
   return { instructions, metadata, maxTurns, maxOutputTokens };

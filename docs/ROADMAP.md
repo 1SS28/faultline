@@ -8,9 +8,9 @@ Reproduce lost acknowledgement after commit; compare naive and idempotent retrie
 
 The local React dashboard uses the existing API: scenario/agent selection, run history, a chronological trace, the service ledger, and failed assertion evidence. Keep fixture runs explicitly labeled. Prioritize the working surface over a marketing page.
 
-## 3. Real agent integration (adapter done, live validation pending)
+## 3. Real agent integration (adapters done, first live run done)
 
-The OpenAI Responses function-tool adapter and repeated-trial CLI are implemented. First live validation requires a selected model, API key, and explicit cost opt-in. Preserve the same tool boundary and state-based assertions. Store model/version/configuration metadata. Run repeated trials and report sample counts and variance; do not present a single passing run as reliability proof.
+Claude and OpenAI adapters and the repeated-trial CLI are implemented. The Claude adapter has run 40 live trials with `claude-sonnet-5-5`, and all passed. See LIVE-EVALUATION.md. Next: a refund tool with no idempotency key field, other models, and a first live OpenAI run. Preserve the same tool boundary and state-based assertions. Store model/version/configuration metadata. Run repeated trials and report sample counts and variance; do not present a single passing run as reliability proof.
 
 Add an exported SDK and example agent owned by another developer. The validation milestone is discovering a real bug in that agent.
 
