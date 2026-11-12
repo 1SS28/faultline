@@ -2,7 +2,7 @@
    One deliberate light look; the chamber and footer supply the dark contrast. */
 :root {
   --paper: #f2f3ef; --sheet: #ffffff; --ink: #0c0c0b; --ink-2: #4a4c45; --line: #d7d9d1; --hover: #e6e7e1;
-  --yellow: #ffd000; --yellow-soft: #fff4c2; --red: #d42a1f; --red-soft: #fdeceb; --green: #0a7c45; --green-soft: #e2f3ea;
+  --yellow: #ffd000; --yellow-soft: #fff4c2; --red: #cc271c; --red-soft: #fdeceb; --green: #0a7c45; --green-soft: #e2f3ea;
   --chamber: #0c0c0b; --chamber-2: #181815; --chamber-line: #2f2f2a; --chamber-ink: #efefe9; --chamber-muted: #a7a79d;
   --display: 'Archivo Variable', 'Arial Narrow', system-ui, sans-serif;
   --body: 'Archivo Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -19,6 +19,7 @@ body { overflow-x: clip; margin: 0; background: var(--paper); color: var(--ink);
 h1, h2, h3, p, ol, ul, dl, dd, figure { margin: 0; }
 ol, ul { padding: 0; list-style: none; }
 h1, h2, h3 { text-wrap: balance; }
+p, li { text-wrap: pretty; }
 a { color: inherit; }
 button { font: inherit; color: inherit; cursor: pointer; }
 :focus-visible { outline: 3px solid var(--yellow); outline-offset: 3px; border-radius: 4px; }
@@ -37,20 +38,21 @@ noscript { display: block; padding: 40px 24px; text-align: center; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font: 800 1.4rem/1 var(--display); font-stretch: 82%; text-decoration: none; letter-spacing: -.01em; }
 .mark { width: 28px; height: 28px; border-radius: 7px; background: var(--yellow); color: var(--ink); display: grid; place-items: center; }
 .top nav { display: flex; gap: 2px; margin-left: auto; }
-.top nav a { padding: 8px 12px; border-radius: 8px; text-decoration: none; color: var(--ink-2); font-weight: 500; font-size: .95rem; }
+.top nav a { padding: 8px 12px; border-radius: 8px; text-decoration: none; color: var(--ink-2); font-weight: 500; font-size: .95rem; transition: color .15s ease-out, background-color .15s ease-out; }
 .top nav a:hover { background: var(--hover); color: var(--ink); }
-.tag { font-weight: 600; font-size: .82rem; line-height: 1; background: var(--ink); color: var(--yellow); padding: 8px 11px; border-radius: 6px; white-space: nowrap; }
-@media (max-width: 780px) { .top nav { display: none; } .tag { margin-left: auto; } }
+.repo { display: inline-flex; align-items: center; gap: 3px; margin-left: -12px; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: .95rem; transition: background-color .15s ease-out; }
+.repo:hover { background: var(--hover); }
+@media (max-width: 780px) { .top nav { display: none; } .repo { margin-left: auto; } }
 
 /* Hero */
 .hero { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); gap: clamp(32px, 5vw, 72px); align-items: center; padding-block: clamp(48px, 7vw, 88px) var(--section); }
-.tagline { font-weight: 600; color: var(--ink-2); }
-.hero h1 { font: 800 clamp(3rem, 6.6vw, 5.6rem)/.93 var(--display); font-stretch: 68%; letter-spacing: -.005em; margin-top: 14px; }
+.hero h1 { font: 800 clamp(3rem, 6.6vw, 5.6rem)/.93 var(--display); font-stretch: 68%; letter-spacing: -.005em; }
 .hero h1 mark { color: inherit; background: linear-gradient(transparent 55%, var(--yellow) 55% 90%, transparent 90%); padding-inline: .04em; }
 .lede { margin-top: 24px; font-size: clamp(1.125rem, 1.8vw, 1.3rem); line-height: 1.55; color: var(--ink-2); max-width: 44ch; }
 .actions { margin-top: 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 18px 28px; }
-.button { display: inline-flex; align-items: center; gap: 10px; background: var(--ink); color: var(--paper); padding: 15px 24px; border-radius: 10px; font-weight: 600; text-decoration: none; box-shadow: 5px 5px 0 var(--yellow); transition: transform .15s, box-shadow .15s; }
+.button { display: inline-flex; align-items: center; gap: 10px; background: var(--ink); color: var(--paper); padding: 15px 24px; border-radius: 10px; font-weight: 600; text-decoration: none; box-shadow: 5px 5px 0 var(--yellow); transition: transform .15s ease-out, box-shadow .15s ease-out; }
 .button:hover { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 var(--yellow); }
+.button:active { transform: scale(.97); box-shadow: 3px 3px 0 var(--yellow); transition-duration: .08s; }
 .link { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; text-decoration: none; padding-bottom: 2px; border-bottom: 2px solid var(--yellow); }
 @media (max-width: 900px) { .hero { grid-template-columns: minmax(0, 1fr); } }
 
@@ -79,8 +81,10 @@ noscript { display: block; padding: 40px 24px; text-align: center; }
 .chamber-head { padding-top: var(--section); }
 .chamber-sub { color: var(--chamber-muted); }
 .picker { margin-top: var(--after-lead); display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 5px; border: 1px solid var(--chamber-line); border-radius: 12px; background: var(--chamber-2); max-width: 100%; }
-.pick { border: 0; background: none; color: var(--chamber-muted); padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: .95rem; }
+/* picker radius minus its padding, so the corners nest */
+.pick { border: 0; background: none; color: var(--chamber-muted); padding: 10px 18px; border-radius: 7px; font-weight: 600; font-size: .95rem; transition: color .15s ease-out, background-color .15s ease-out, transform .1s ease-out; }
 .pick:hover { color: var(--chamber-ink); background: #232320; }
+.pick:active { transform: scale(.97); }
 .pick[aria-selected="true"] { background: var(--yellow); color: var(--ink); }
 .question { margin-top: var(--after-lead); font-size: clamp(1.15rem, 2vw, 1.35rem); max-width: 50ch; }
 .error { margin-top: 16px; color: var(--ink); background: var(--red-soft); border-radius: 8px; padding: 10px 14px; }
@@ -89,7 +93,7 @@ noscript { display: block; padding: 40px 24px; text-align: center; }
 .report { background: var(--sheet); color: var(--ink); border-radius: 16px; padding: 28px; display: grid; gap: 22px; align-content: start; min-width: 0; }
 .report-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .report h3 { font: 800 1.65rem/1 var(--display); font-stretch: 75%; }
-.verdict { font: 600 .8rem/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; padding: 6px 10px; border-radius: 6px; }
+.verdict { font: 700 .8rem/1 var(--body); text-transform: uppercase; letter-spacing: .1em; padding: 6px 10px; border-radius: 6px; }
 .report.failed .verdict { color: var(--red); background: var(--red-soft); }
 .report.passed .verdict { color: var(--green); background: var(--green-soft); }
 .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 18px 0; border-block: 1.5px dashed var(--line); }
@@ -119,8 +123,9 @@ noscript { display: block; padding: 40px 24px; text-align: center; }
 .run-line { margin-top: 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; color: var(--chamber-muted); font-size: .92rem; }
 .run-line p { flex: 1 1 280px; }
 .ms { font-family: var(--mono); color: var(--chamber-ink); display: inline-block; }
-.again { display: inline-flex; align-items: center; gap: 8px; background: none; border: 1.5px solid var(--chamber-line); border-radius: 9px; padding: 9px 15px; font-weight: 600; font-size: .92rem; color: var(--chamber-ink); }
+.again { display: inline-flex; align-items: center; gap: 8px; background: none; border: 1.5px solid var(--chamber-line); border-radius: 9px; padding: 9px 15px; font-weight: 600; font-size: .92rem; color: var(--chamber-ink); transition: color .15s ease-out, border-color .15s ease-out, transform .1s ease-out; }
 .again:hover { border-color: var(--yellow); color: var(--yellow); }
+.again:active { transform: scale(.97); }
 
 /* Sections */
 .block { padding-block: var(--section); }
@@ -174,7 +179,10 @@ footer { margin-top: var(--section); background: var(--chamber); color: var(--ch
 footer .wrap { padding-block: 40px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 32px; font-size: .92rem; }
 footer .brand { color: var(--chamber-ink); }
 footer .legal { flex-basis: 100%; max-width: 72ch; font-size: .8rem; line-height: 1.5; }
+footer .legal a { color: var(--chamber-ink); text-underline-offset: 2px; }
+footer .legal a:hover { color: var(--yellow); }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+  .button, .pick, .again, .top nav a, .repo { transition: none; }
 }

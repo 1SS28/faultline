@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowRight, Bot, Check, RotateCcw, Zap } from 'lucide-react';
+import { ArrowDown, ArrowRight, ArrowUpRight, Bot, Check, RotateCcw, Zap } from 'lucide-react';
 import type { Run, Scenario } from '../../src/core/types';
 import { agents, authorizedCents, describe, money, runBoth, scenarios, type Pair } from './demo';
 
 const sections = [['demo', 'Demo'], ['how', 'How it works'], ['status', 'Status'], ['pricing', 'Pricing']] as const;
+const repo = 'https://github.com/1SS28/faultline';
 const totalOf = (run: Run) => run.refunds.reduce((sum, refund) => sum + refund.amountCents, 0);
 
 export function App({ initial }: { initial?: Pair }) {
@@ -13,13 +14,12 @@ export function App({ initial }: { initial?: Pair }) {
       <div className="wrap">
         <a className="brand" href="#top" aria-label="Faultline, back to top"><span className="mark"><Zap size={15} fill="currentColor" aria-hidden="true" /></span>faultline</a>
         <nav aria-label="Sections">{sections.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}</nav>
-        <span className="tag">Private preview</span>
+        <a className="repo" href={repo}>GitHub<ArrowUpRight size={15} aria-hidden="true" /></a>
       </div>
     </header>
     <main id="main">
       <section className="hero wrap" id="top" aria-labelledby="hero-title">
         <div className="hero-copy">
-          <p className="tagline">Crash tests for AI agents</p>
           <h1 id="hero-title">Test what your AI agent does when <mark>a tool fails.</mark></h1>
           <p className="lede">Faultline breaks the tools your AI agent relies on, then checks what actually happened. Every bug it finds becomes a test.</p>
           <div className="actions">
@@ -93,7 +93,7 @@ export function App({ initial }: { initial?: Pair }) {
       <div className="wrap">
         <a className="brand" href="#top"><span className="mark"><Zap size={15} fill="currentColor" aria-hidden="true" /></span>faultline</a>
         <span>Crash tests for AI agents · Private preview</span>
-        <p className="legal">Open source under the Apache 2.0 license and provided as is, without warranty. Not affiliated with or endorsed by Anthropic or OpenAI. Claude is a trademark of Anthropic and OpenAI is a trademark of OpenAI. This site sets no cookies and runs no analytics.</p>
+        <p className="legal"><a href={repo}>Open source</a> under the Apache 2.0 license and provided as is, without warranty. Not affiliated with or endorsed by Anthropic or OpenAI. Claude is a trademark of Anthropic and OpenAI is a trademark of OpenAI. This site sets no cookies and runs no analytics.</p>
       </div>
     </footer>
   </>;
