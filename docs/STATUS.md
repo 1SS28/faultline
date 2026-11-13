@@ -26,7 +26,6 @@
 
 - Subprocesses isolate trusted fixtures. They are not a security sandbox, and arbitrary uploaded code is not accepted.
 - Live evaluations run through the CLI, separately from the fixture queue. An interrupted live trial keeps the usage metadata known at that point but loses its partial tool trace.
-- `src/billing/store.ts` and `sql/004_billing.sql` are unreferenced. The schema gets applied on migration, but nothing calls the store and nothing tests it. Either wire it into the evaluation CLI or drop it.
 - The AWS API has one shared API key. Per-user authentication, tenant isolation, container deployment, and outside validation are still open.
 
 ## Running locally

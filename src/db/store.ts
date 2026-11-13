@@ -16,7 +16,7 @@ export class RunStore {
   constructor(readonly db: Database) {}
   /** Applies the SQL migrations. A bundled deployment passes the folder it copied them to. */
   async migrate(directory = new URL('../../sql/', import.meta.url)) {
-    const sql = (await Promise.all(['001_initial.sql', '002_jobs.sql', '003_run_metadata.sql', '004_billing.sql'].map(name => readFile(new URL(name, directory), 'utf8')))).join('\n');
+    const sql = (await Promise.all(['001_initial.sql', '002_jobs.sql', '003_run_metadata.sql', '004_drop_billing.sql'].map(name => readFile(new URL(name, directory), 'utf8')))).join('\n');
     await this.db.transaction(async tx => {
       // Processes that start together, such as two cold-starting workers, take turns instead of
       // racing to create the same tables.

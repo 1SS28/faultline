@@ -15,7 +15,7 @@ before(async () => {
   db = await connectDatabase({ memory: true });
   runs = new RunStore(db); await runs.migrate(); jobs = new JobStore(db, runs);
 });
-beforeEach(async () => { await db.query('TRUNCATE billing_trials, job_attempts, jobs, trace_events, refunds, assertions, runs'); });
+beforeEach(async () => { await db.query('TRUNCATE job_attempts, jobs, trace_events, refunds, assertions, runs'); });
 after(async () => { await db?.close(); });
 
 test('a message delivered twice runs the fixture once', async () => {

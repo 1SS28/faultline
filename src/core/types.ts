@@ -27,8 +27,6 @@ export interface AgentContext {
 /** Adapter contract: wrap a trusted agent's refund tool with context.issueRefund. */
 export type Agent = (context: AgentContext) => Promise<AgentResult>;
 export interface RunMetadata {
-  billingMode?: 'fixture' | 'byok' | 'included';
-  billingSimulation?: boolean;
   provider: 'fixture' | 'openai' | 'anthropic';
   model?: string;
   promptVariant?: 'baseline' | 'recovery';

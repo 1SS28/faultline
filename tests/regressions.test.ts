@@ -12,7 +12,7 @@ before(async () => {
   store = new RunStore(db); await store.migrate();
 });
 beforeEach(async () => {
-  await db.query('TRUNCATE billing_trials, job_attempts, jobs, trace_events, refunds, assertions, runs');
+  await db.query('TRUNCATE job_attempts, jobs, trace_events, refunds, assertions, runs');
   clock = Date.parse('2026-11-01T00:00:00Z');
 });
 after(async () => { await db?.close(); });
