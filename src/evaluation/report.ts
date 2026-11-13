@@ -1,4 +1,13 @@
 import type { Run } from '../core/types.js';
+
+/** A nominal 95% Wilson interval for a pass rate. It assumes independent trials. */
+export function wilson95(passed: number, count: number) {
+  const p = passed / count, z = 1.96, divisor = 1 + z * z / count;
+  const center = (p + z * z / (2 * count)) / divisor;
+  const margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * count)) / count) / divisor;
+  return { lower: Math.max(0, center - margin), upper: Math.min(1, center + margin), method: 'Wilson; assumes independent trials' };
+}
+
 export function summarizeTrials(runs: Run[]) {
   const groups = new Map<string, Run[]>();
   for (const run of runs) {
@@ -7,15 +16,13 @@ export function summarizeTrials(runs: Run[]) {
   }
   return [...groups.values()].map(group => {
     const count = group.length, passed = group.filter(run => run.status === 'passed').length;
-    const p = passed / count, z = 1.96, divisor = 1 + z * z / count;
-    const center = (p + z * z / (2 * count)) / divisor;
-    const margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * count)) / count) / divisor;
+    const p = passed / count;
     const live = group.every(run => run.metadata?.provider !== undefined && run.metadata.provider !== 'fixture');
     return {
       agentVersion: group[0]!.agentVersion, scenario: group[0]!.scenario, trials: count, passed,
       passRate: Math.round(p * 10000) / 100,
       // Nominal interval assumes independent trials; not meaningful for deterministic fixtures.
-      confidence95: live ? { lower: Math.max(0, center - margin), upper: Math.min(1, center + margin), method: 'Wilson; assumes independent trials' } : null,
+      confidence95: live ? wilson95(passed, count) : null,
       failedAssertions: Object.fromEntries([...new Set(group.flatMap(run => run.assertions.map(item => item.key)))].map(key => [key, group.filter(run => run.assertions.some(item => item.key === key && !item.passed)).length])),
       // Separates the model's own finish call from loop limits, so an exhausted turn budget never reads as a deliberate escalation.
       stopReasons: live ? group.reduce<Record<string, number>>((counts, run) => {

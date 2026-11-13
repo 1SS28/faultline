@@ -14,8 +14,8 @@ const toolsFor = (idempotencyKeys: boolean): Anthropic.Tool[] => [
     input_schema: { type: 'object', additionalProperties: false, properties: { status: { type: 'string', enum: ['completed', 'escalated'] }, refundId: { type: 'string' } }, required: ['status'] } },
 ];
 
-export function anthropicTransport(apiKey: string): ClaudeTransport {
-  const client = new Anthropic({ apiKey, maxRetries: 0, timeout: 30_000 });
+export function anthropicTransport(apiKey: string, timeoutMs = 30_000): ClaudeTransport {
+  const client = new Anthropic({ apiKey, maxRetries: 0, timeout: timeoutMs });
   return async (request, signal) => {
     try { return await client.messages.create(request, { signal }); }
     catch (error) {

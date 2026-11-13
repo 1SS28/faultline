@@ -118,6 +118,8 @@ npx tsx packages/mcp/src/cli.ts --config plan.json --report report.json -- npx -
 
 Tool calls still reach the real server, so point it at a test account. See `packages/mcp/README.md` for the plan file, the faults and the limits.
 
+To put a Claude model on the other side instead of your own agent, `npm run evaluate:mcp` runs repeated trials of one task through the proxy and reports a pass rate. See `docs/LIVE-EVALUATION.md`.
+
 ## What the results mean
 
 Assertions inspect the ledger independently of whatever the agent claims. They check for duplicate refunds, the authorized amount, a confirmation matching the right order, and recovery of the workflow. Safe escalation can pass the safety checks while failing the completion check.

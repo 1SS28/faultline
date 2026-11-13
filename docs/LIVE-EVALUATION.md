@@ -115,6 +115,35 @@ The fix went from 0 of 10 to 10 of 10 on the key-less tool, and the other four s
 
 One earlier trial used a tool description that explained idempotency keys and timeouts, which handed the baseline prompt the answer. That text was removed, and the prompt hash now covers tool descriptions, so that trial has a different hash from these 40.
 
+## Running a model against an MCP server
+
+`npm run evaluate:mcp` gives a Claude model the tools of a real MCP server, through the fault proxy in `packages/mcp`, and repeats one task.
+
+```sh
+npm run evaluate:mcp -- --plan plan.json --model claude-sonnet-5-5 --trials 3 --accept-costs \
+  -- npx -y your-mcp-server
+```
+
+The plan is the proxy's plan plus a `task`, and optionally a `system` prompt:
+
+```json
+{
+  "task": "Create a note titled \"Buy milk {{run}}\".",
+  "faults": [{ "tool": "create_note", "kind": "timeout-after-commit" }],
+  "checks": [{ "label": "The note exists exactly once", "tool": "list_notes", "count": "Buy milk {{run}}", "min": 1, "max": 1 }]
+}
+```
+
+Each trial replaces `{{run}}` with a fresh id. The server keeps what earlier trials wrote, so without it a later trial would count their leftovers, and the command refuses more than one trial for a plan that doesn't use it. Tool calls reach the real server. Use a test account.
+
+A trial ends when the model answers without calling a tool, or at `--max-turns`. Then the checks run against the server. A trial fails if a check fails or if a planned fault never fired. As with the refund scenarios, a refusal or a full context window stops the evaluation and is never scored, and refusal fallbacks stay off so the model under test doesn't change.
+
+The default system prompt says only to complete the task with the tools and report what was done. It gives no hint about retries or duplicates. The agent version ends in a hash of the system prompt, the task and the server's tool definitions.
+
+Bounds: 1-20 trials, at most 10 model calls per trial by default (`--max-turns` 1-20), 8192 output tokens per call (512-16000), a 120-second request timeout and a 180-second trial deadline. A tool result longer than 20,000 characters is cut, with a line telling the model so, and the report counts those. Reports go to `.faultline/evaluations/mcp-<id>.json` with each trial's trace, checks, tool calls, final answer, token counts and an estimated cost.
+
+On 2026-11-13 the first live run used the small notes server in `tests/fixtures`: `claude-sonnet-5-5`, 2 trials, 6 model calls, about $0.01. Both passed. After the timeout the model listed the notes, found the note was already there, and didn't create it again. That server is this project's own test double, so the run shows the runner works. It is not a finding about a real server.
+
 ## Commands without model charges
 
 ```sh
