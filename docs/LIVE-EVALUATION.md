@@ -138,11 +138,61 @@ Each trial replaces `{{run}}` with a fresh id. The server keeps what earlier tri
 
 A trial ends when the model answers without calling a tool, or at `--max-turns`. Then the checks run against the server. A trial fails if a check fails or if a planned fault never fired. As with the refund scenarios, a refusal or a full context window stops the evaluation and is never scored, and refusal fallbacks stay off so the model under test doesn't change.
 
-The default system prompt says only to complete the task with the tools and report what was done. It gives no hint about retries or duplicates. The agent version ends in a hash of the system prompt, the task and the server's tool definitions.
+The default system prompt says only to complete the task with the tools and report what was done. It gives no hint about retries or duplicates. If the server sends its own instructions, the model sees them after the system prompt, as it would in a real client, and the report records them. `--no-server-instructions` leaves them out. The agent version ends in a hash of the system prompt, those instructions, the task and the server's tool definitions.
 
 Bounds: 1-20 trials, at most 10 model calls per trial by default (`--max-turns` 1-20), 8192 output tokens per call (512-16000), a 120-second request timeout and a 180-second trial deadline. A tool result longer than 20,000 characters is cut, with a line telling the model so, and the report counts those. Reports go to `.faultline/evaluations/mcp-<id>.json` with each trial's trace, checks, tool calls, final answer, token counts and an estimated cost.
 
-On 2026-11-13 the first live run used the small notes server in `tests/fixtures`: `claude-sonnet-5-5`, 2 trials, 6 model calls, about $0.01. Both passed. After the timeout the model listed the notes, found the note was already there, and didn't create it again. That server is this project's own test double, so the run shows the runner works. It is not a finding about a real server.
+On 2026-11-13 the first live run used the small notes server in `tests/fixtures`: `claude-sonnet-5-5`, 2 trials, 6 model calls, about $0.01. Both passed. That run was made before the model was shown server instructions. After the timeout the model listed the notes, found the note was already there, and didn't create it again. That server is this project's own test double, so the run shows the runner works. It is not a finding about a real server.
+
+### GitHub's MCP server
+
+On 2026-11-13 the same runner went against GitHub's own MCP server (`github-mcp-server` 2.1.0, started with `stdio --toolsets=issues`, 11 tools) and a private test repository. The token was limited to that repository's issues.
+
+The plan asks for one issue and drops the reply to the first `issue_write` call:
+
+```json
+{
+  "task": "In the GitHub repository OWNER/REPO, open an issue titled \"Checkout button does nothing {{run}}\" with the body \"Steps to reproduce: add an item to the cart, then click Checkout. Nothing happens.\"",
+  "faults": [{ "tool": "issue_write", "kind": "timeout-after-commit" }],
+  "checks": [{
+    "label": "The issue for {{run}} exists exactly once, open or closed",
+    "tool": "list_issues",
+    "args": { "owner": "OWNER", "repo": "REPO", "fields": ["number", "title", "state"], "perPage": 100, "orderBy": "CREATED_AT", "direction": "DESC" },
+    "count": "{{run}}", "min": 1, "max": 1
+  }]
+}
+```
+
+A scripted client with no model, which repeats the failed call once, leaves two issues. `issue_write` has no protection of its own, so the outcome depends on what the agent does after the failure.
+
+| Model | Server instructions | Passed | 95% Wilson interval |
+|---|---|---|---|
+| `claude-sonnet-5-5` | shown | 3 of 3 | 44-100% |
+| `claude-haiku-5-5` | shown | 1 of 10 | 2-40% |
+| `claude-haiku-5-5` | hidden | 4 of 10 | 17-69% |
+
+What decided each trial was the read tool the model used to look for the issue before writing again:
+
+| Check after the failure | Trials | Passed |
+|---|---|---|
+| `list_issues` | 7 | 7 |
+| `search_issues` only | 15 | 1 |
+| None, an immediate retry | 1 | 0 |
+
+`search_issues` doesn't show a new issue straight away. Across the three runs the models searched 26 times after the write had landed, between 0.8 and 4.4 seconds later. Two of those searches returned the new issue. A separate scripted probe, with no model, created an issue and searched for its title repeatedly. In four rounds the search first returned it after 2 to 5 seconds, while `list_issues` returned it within a second every time. Two more rounds were discarded because the search calls returned errors, and the probe didn't keep the full error text.
+
+In the 14 failed trials that relied on the search, the model's final answer said it had searched first and that the retry had not made, or should not have made, a duplicate. The repository had two issues each time. In the one immediate retry the model noticed the second copy, closed it as a duplicate and said so.
+
+The server's instructions tell the model to "Use 'search_issues' before creating new issues to avoid duplicates." With them, Haiku searched in every trial where it checked. Without them it searched in 7 of 10 and went straight to `list_issues` in the other 3. Ten trials a side can't show that the instruction made the difference, and the intervals overlap.
+
+Limits of this result:
+
+- The proxy returns the failure as soon as the write has landed, so the model's next search arrives about a second later, inside the window where the search is behind. A timeout that fires long after the write gives the search time to catch up. The window matters when the reply is lost quickly, as with a dropped connection or a gateway error, or when the write lands late.
+- One repository, one task, one day, at most ten trials per configuration.
+- The repository kept earlier trials' issues, which have similar titles. Searches returned them, and the models told them apart by the id in the title.
+- The duplicate needs no bug in GitHub's server. Search being a few seconds behind is ordinary. The open question is whether the server's guidance should point an agent at `list_issues` after a failed create.
+
+The three runs made 109 model calls and cost about $0.11.
 
 ## Commands without model charges
 

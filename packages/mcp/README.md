@@ -104,7 +104,7 @@ console.log(formatReport(proxy.report()));
 - Tools, resources and prompts are passed through. Notifications, sampling and elicitation are not.
 - A check counts text matches. It can't compare fields or follow pagination, so write the read call to return everything you need on one page.
 - The trace and report hold tool arguments and results. Treat the report file like the data it came from.
-- It has run against the test server in this repository and the official MCP memory server. No one outside the project has used it.
+- It has run against the test server in this repository, the official MCP memory server and GitHub's MCP server. No one outside the project has used it.
 
 ## License
 
