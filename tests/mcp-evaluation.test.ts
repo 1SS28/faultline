@@ -83,7 +83,8 @@ test('a model that retries a lost reply fails every trial, with the evidence fro
   const first = observed[0]!;
   assert.equal(first.messages[0]!.content, 'Create a note titled "Buy milk run1".');
   assert.deepEqual((first.tools as Anthropic.Tool[]).map(tool => tool.name), ['create_note', 'create_note_once', 'list_notes']);
-  assert.deepEqual(first.system, [{ type: 'text', text: defaultSystem, cache_control: { type: 'ephemeral' } }]);
+  assert.deepEqual(first.system, [{ type: 'text', text: `${defaultSystem}\n\nInstructions from the notes server:\nKeeps short notes.`, cache_control: { type: 'ephemeral' } }]);
+  assert.equal(evaluation.serverInstructions, 'Keeps short notes.');
   assert.equal(first.tool_choice, undefined);
   // the lost reply reaches the model as a failed tool result with neutral wording
   assert.deepEqual(lastResults(observed[1]!).map(result => [result.is_error, result.content]), [[true, 'Request timed out']]);
@@ -204,4 +205,15 @@ test('MCP tool names and schemas are made safe for the Claude API', () => {
   assert.equal(converted.mcpName.get('notes_create_now_2'), 'notes_create_now');
   assert.deepEqual(converted.tools[0]!.input_schema, { type: 'object', properties: { title: { type: 'string' } } });
   assert.equal(converted.tools[1]!.description, '');
+});
+
+test("the server's own instructions can be left out, and that is a different agent version", async () => {
+  const { upstream } = await connectNotes();
+  const observed: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const shown = await evaluateMcp({ upstream, plan, transport: careful, model: 'claude-sonnet-5-5', trials: 1, runId: ids(), ...limits });
+  const hidden = await evaluateMcp({ upstream, plan, transport: blindRetrier(observed), model: 'claude-sonnet-5-5', trials: 1, runId: ids(), serverInstructions: false, ...limits });
+
+  assert.deepEqual(observed[0]!.system, [{ type: 'text', text: defaultSystem, cache_control: { type: 'ephemeral' } }]);
+  assert.equal(hidden.serverInstructions, null);
+  assert.notEqual(hidden.agentVersion, shown.agentVersion);
 });

@@ -11,6 +11,7 @@ const help = `Faultline MCP evaluation: run a Claude model against a real MCP se
 
 The plan is the proxy's plan (packages/mcp/README.md) plus "task", what to ask the model, and an optional "system" prompt.
 Write {{run}} in the task and checks: each trial replaces it with a fresh id, so trials on one account don't collide.
+The model also sees the server's own instructions, as it would in a real client. --no-server-instructions leaves them out.
 
 Needs ANTHROPIC_API_KEY, an explicit model, and --accept-costs. Tool calls reach the real server, so use a test account.
 Limits: 1-20 trials; --max-turns 1-20 (default 10); --max-output-tokens 512-16000 per call (default 8192).`;
@@ -18,7 +19,7 @@ Limits: 1-20 trials; --max-turns 1-20 (default 10); --max-output-tokens 512-1600
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   plan: { type: 'string' }, model: { type: 'string' }, trials: { type: 'string', default: '1' },
   'max-turns': { type: 'string', default: '10' }, 'max-output-tokens': { type: 'string', default: '8192' },
-  'accept-costs': { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
+  'accept-costs': { type: 'boolean', default: false }, 'no-server-instructions': { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
 } });
 if (values.help) {
   console.log(help);
@@ -55,6 +56,7 @@ console.log(`MCP evaluation: ${trials} trial(s) of ${model}, at most ${trials * 
 try {
   // thinking on a long tool list can take longer than the refund scenarios' 30 seconds
   const evaluation = await evaluateMcp({ upstream, plan, transport: anthropicTransport(apiKey!, 120_000), model: model!, trials, maxTurns, maxOutputTokens,
+    serverInstructions: !values['no-server-instructions'],
     onTrial: record => {
       console.log(`[${record.trial}/${trials}] ${record.status.toUpperCase()} (${record.stopReason})  ${record.toolCalls.map(call => call.tool + (call.failed ? '!' : '')).join(' > ') || 'no tool calls'}  ${dollars(record.costUsd)}`);
       for (const check of record.checks.filter(item => !item.passed)) console.log(`      ✗ ${check.label}: ${check.actual}${check.expected ? ` (expected ${check.expected})` : ''}`);

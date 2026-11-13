@@ -46,9 +46,11 @@ export interface TrialRecord extends ModelRun {
 }
 export interface McpEvaluation {
   model: string;
-  /** Ends in a hash of the system prompt, the task and the tool definitions, so a change to any of them is a new version. */
+  /** Ends in a hash of the system prompt, the server's instructions, the task and the tool definitions, so a change to any of them is a new version. */
   agentVersion: string;
   server: string | null;
+  /** The server's own guidance as the model saw it, or null if it has none or it was left out. */
+  serverInstructions: string | null;
   plannedTrials: number;
   completedTrials: number;
   executionError: string | null;
@@ -69,7 +71,7 @@ export interface McpEvaluation {
  */
 export async function evaluateMcp(options: {
   upstream: Client; plan: unknown; transport: ClaudeTransport; model: string; trials: number;
-  maxTurns: number; maxOutputTokens: number; maxResultChars?: number;
+  maxTurns: number; maxOutputTokens: number; maxResultChars?: number; serverInstructions?: boolean;
   onTrial?: (record: TrialRecord) => void; runId?: () => string;
 }): Promise<McpEvaluation> {
   const { upstream, model, trials } = options;
@@ -82,8 +84,11 @@ export async function evaluateMcp(options: {
   const unknown = [...new Set([...template.plan.faults, ...template.plan.checks].map(item => item.tool).filter(name => !known.has(name)))];
   if (unknown.length) throw new Error(`The server has no tool named ${unknown.join(', ')}. Its tools: ${[...known].join(', ')}`);
 
-  const hash = createHash('sha256').update(template.system).update(template.task).update(JSON.stringify(tools)).digest('hex');
   const server = upstream.getServerVersion();
+  // a real client shows the model the server's own guidance, so the test does too
+  const guidance = options.serverInstructions === false ? null : upstream.getInstructions()?.trim() || null;
+  const withGuidance = (system: string) => guidance ? `${system}\n\nInstructions from the ${server?.name ?? 'MCP'} server:\n${guidance}` : system;
+  const hash = createHash('sha256').update(withGuidance(template.system)).update(template.task).update(JSON.stringify(tools)).digest('hex');
   const records: TrialRecord[] = [];
   let executionError: string | null = null;
   let interruptedTrial: McpEvaluation['interruptedTrial'] = null;
@@ -94,7 +99,7 @@ export async function evaluateMcp(options: {
     const proxy = createFaultProxy({ upstream, faults: plan.faults, surface: plan.surface });
     const usage = noUsage();
     try {
-      const run = await runModelThroughProxy({ proxy, transport: options.transport, model, system, task, usage,
+      const run = await runModelThroughProxy({ proxy, transport: options.transport, model, system: withGuidance(system), task, usage,
         maxTurns: options.maxTurns, maxOutputTokens: options.maxOutputTokens, maxResultChars: options.maxResultChars });
       for (const check of plan.checks) await proxy.check(check);
       const report = proxy.report();
@@ -114,7 +119,7 @@ export async function evaluateMcp(options: {
     return sum;
   }, { ...(interruptedTrial?.usage ?? noUsage()) });
   return {
-    model, agentVersion: `anthropic/${model}@${hash.slice(0, 8)}`, server: server ? `${server.name} ${server.version}` : null,
+    model, agentVersion: `anthropic/${model}@${hash.slice(0, 8)}`, server: server ? `${server.name} ${server.version}` : null, serverInstructions: guidance,
     plannedTrials: trials, completedTrials: records.length, executionError, interruptedTrial,
     summary: {
       trials: records.length, passed, passRate: records.length ? Math.round(passed / records.length * 10000) / 100 : null,
