@@ -10,6 +10,7 @@
 - The dashboard has been checked by hand in a browser at desktop and phone widths: all four scenarios, run history and filters, opening saved runs, evidence export, and the error shown when the API is down.
 - Claude (Messages API) and OpenAI (Responses API) adapters sharing one prompt, tool set and argument validation, with bounded model calls and output, explicit model selection, prompt fingerprints, and usage metadata. A live trial stops once the simulated tool's call budget is spent.
 - An SDK (`packages/sdk`, Apache-2.0, no dependencies) that injects the same four kinds of fault into any tool function, with checks written against the user's own service. It builds as the `faultline-sdk` package.
+- An MCP proxy (`packages/mcp`, Apache-2.0) that sits between an agent and any stdio MCP server, injects the same four faults into chosen tool calls, and then checks the server's state through its own read tools. It builds as `faultline-mcp-proxy`.
 - Repeated-trial CLI and JSON reports covering per-scenario pass rates, assertion counts, and Wilson intervals for live trials only.
 - Local PostgreSQL adapter and Compose file.
 - CI on GitHub runs the build, tests, demo, regression command, and a fixture evaluation, and passes.
@@ -19,6 +20,7 @@
 
 - Only one live model has run. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On `timeout-no-key` it escalated in 10 of 10 trials with the baseline prompt, and refunded twice in 10 of 10 with the recovery prompt. After the recovery prompt was fixed, it passed 30 of 30 across all five scenarios. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
 - No team outside this project has used the SDK. It is published on npm as `faultline-sdk`, and its results don't appear in the dashboard.
+- The MCP proxy has run against the test server in `tests/fixtures` and the official MCP memory server, which handled a retried write correctly. It hasn't found a bug in a real server yet, no model has been driven through it, and it isn't on npm.
 - Docker is unrun. Networked PostgreSQL has run, since the AWS worker and API use RDS, but workers competing for the same jobs on a real server haven't been tested. Existing concurrency tests use the embedded engine's single connection.
 - The AWS deployment in `infra/` runs fixture trials only. Live model runs stay local, and deploys are manual. See `infra/README.md`.
 

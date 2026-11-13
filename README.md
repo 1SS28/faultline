@@ -2,7 +2,7 @@
 
 Crash tests for AI agent tool workflows. Inject a failure, inspect the actual side effects, and turn the failure into a repeatable regression test.
 
-Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. A small SDK adds the same faults to your own agent's tools. A learning deployment in `infra/` runs the same job code on AWS with Lambda, SQS and RDS.
+Faultline ships a React dashboard, a TypeScript simulation engine, a CLI, a local HTTP API, PostgreSQL persistence, and regression tests. The bundled agents are deterministic fixtures, not live LLMs. Claude and OpenAI adapters are available through the evaluation CLI, with explicit model selection and cost opt-in. A small SDK adds the same faults to your own agent's tools, and a proxy adds them in front of any MCP server. A learning deployment in `infra/` runs the same job code on AWS with Lambda, SQS and RDS.
 
 ## Run the demo
 
@@ -108,6 +108,16 @@ To run a custom agent against the built-in refund scenarios instead, `runAgent(s
 
 The callback runs in this process. It gets no execution sandbox and no wall-clock timeout, so don't point it at untrusted uploaded code. The simulator has a tool-call budget but can't stop an infinite loop inside adapter code. The HTTP API exposes only the two built-in fixtures.
 
+## Testing an MCP server
+
+To test an MCP server you didn't write, put the proxy in `packages/mcp` between your agent and the server. It passes tool calls through, breaks the ones you pick, and then uses the server's own read tools to count what is really there.
+
+```sh
+npx tsx packages/mcp/src/cli.ts --config plan.json --report report.json -- npx -y your-mcp-server
+```
+
+Tool calls still reach the real server, so point it at a test account. See `packages/mcp/README.md` for the plan file, the faults and the limits.
+
 ## What the results mean
 
 Assertions inspect the ledger independently of whatever the agent claims. They check for duplicate refunds, the authorized amount, a confirmation matching the right order, and recovery of the workflow. Safe escalation can pass the safety checks while failing the completion check.
@@ -124,6 +134,7 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/jobs/`: durable SQL queue, lease management, and subprocess worker.
 - `src/agents/`: Claude and OpenAI adapters, sharing one prompt and tool set.
 - `packages/sdk/`: fault injection for your own agent's tools, packaged as `faultline-sdk` under Apache-2.0.
+- `packages/mcp/`: a proxy that injects the same faults in front of any stdio MCP server, as `faultline-mcp-proxy` under Apache-2.0. Not on npm yet.
 - `src/evaluation/`: repeated trials, usage accounting, and JSON reports.
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.
@@ -135,4 +146,4 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 
 ## License
 
-Apache License, Version 2.0. See `LICENSE` and `NOTICE`. The SDK in `packages/sdk` carries its own copy of the same license.
+Apache License, Version 2.0. See `LICENSE` and `NOTICE`. The packages in `packages/sdk` and `packages/mcp` carry their own copies of the same license.

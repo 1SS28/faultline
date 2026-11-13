@@ -15,6 +15,7 @@ jobs:
       - run: npm run build
       - run: npm run build:site
       - run: npm run build:sdk
+      - run: npm run build:mcp
       - run: npm test
       - run: npm run demo
       - run: npm run faultline -- run timeout-after-commit resilient

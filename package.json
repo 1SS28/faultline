@@ -22,6 +22,7 @@
     "build:site": "tsc --project site/tsconfig.json && vite build --config site/vite.config.ts",
     "preview:site": "vite preview --config site/vite.config.ts",
     "build:sdk": "tsc --project packages/sdk/tsconfig.json",
+    "build:mcp": "npm run build:sdk && tsc --project packages/mcp/tsconfig.json",
     "build": "npm run typecheck && vite build",
     "worker": "tsx src/jobs/main.ts",
     "evaluate": "tsx src/evaluation/cli.ts"
@@ -40,6 +41,7 @@
   "devDependencies": {
     "@fontsource-variable/archivo": "^5.3.0",
     "@fontsource-variable/martian-mono": "^5.3.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",

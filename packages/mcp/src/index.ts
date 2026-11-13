@@ -1,0 +1,240 @@
+/**
+ * Faultline MCP proxy. Licensed under the Apache License, Version 2.0; see LICENSE.
+ *
+ * Sits between an agent and an MCP server, breaks chosen tool calls on purpose, then asks the
+ * server what it really holds. See README.md.
+ */
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import {
+  CallToolRequestSchema, ErrorCode, GetPromptRequestSchema, ListPromptsRequestSchema, ListResourceTemplatesRequestSchema,
+  ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema, type CallToolResult, type Tool,
+} from '@modelcontextprotocol/sdk/types.js';
+import { createLab, faults, realClock, ToolFailure, type Check, type Fault, type Lab, type LabEvent } from 'faultline-sdk';
+
+export const VERSION = '0.1.0';
+export const faultKinds = ['timeout-after-commit', 'timeout-before-commit', 'rate-limit', 'malformed-response'] as const;
+export type FaultKind = typeof faultKinds[number];
+export const surfaces = ['tool-error', 'protocol-error'] as const;
+/** How an injected failure reaches the agent: as a failed tool result, or as a JSON-RPC error. */
+export type Surface = typeof surfaces[number];
+
+/** One fault on one tool. `calls` counts that tool's calls from 1, and defaults to the first call. */
+export interface FaultSpec {
+  tool: string;
+  kind: FaultKind;
+  calls?: number[];
+  /** For rate-limit: how long the tool stays limited. Defaults to 1000. */
+  retryAfterMs?: number;
+  /** For the two timeouts: the error text the agent sees. Defaults to "Request timed out". */
+  message?: string;
+}
+
+/** A check on the server's own state, made with one of its read tools after the agent is done. */
+export interface StateCheck {
+  label: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  /** A regular expression. The check counts its matches in the text the tool returns. */
+  count: string;
+  min?: number;
+  max?: number;
+}
+export interface Plan { faults: FaultSpec[]; checks: StateCheck[]; surface: Surface }
+export interface Report { status: 'passed' | 'failed' | 'unchecked'; checks: Check[]; events: LabEvent[] }
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const positiveIntegers = (value: unknown): value is number[] => Array.isArray(value) && value.length > 0 && value.every(item => Number.isInteger(item) && item > 0);
+
+/** Validates a plan read from JSON or the command line. Throws an Error that says what to fix. */
+export function parsePlan(input: unknown): Plan {
+  if (!isRecord(input)) throw new Error('The plan must be a JSON object');
+  const { faults: faultList = [], checks: checkList = [], surface = 'tool-error' } = input;
+  if (!Array.isArray(faultList) || !Array.isArray(checkList)) throw new Error('"faults" and "checks" must be arrays');
+  if (!surfaces.includes(surface as Surface)) throw new Error(`"surface" must be one of: ${surfaces.join(', ')}`);
+  const plannedFaults = faultList.map((item, index): FaultSpec => {
+    if (!isRecord(item) || typeof item.tool !== 'string' || !item.tool) throw new Error(`faults[${index}] needs a "tool" name`);
+    if (!faultKinds.includes(item.kind as FaultKind)) throw new Error(`faults[${index}].kind must be one of: ${faultKinds.join(', ')}`);
+    if (item.calls !== undefined && !positiveIntegers(item.calls)) throw new Error(`faults[${index}].calls must list call numbers, counting from 1`);
+    if (item.retryAfterMs !== undefined && !(Number.isFinite(item.retryAfterMs) && (item.retryAfterMs as number) > 0)) throw new Error(`faults[${index}].retryAfterMs must be a positive number`);
+    if (item.message !== undefined && typeof item.message !== 'string') throw new Error(`faults[${index}].message must be text`);
+    return { tool: item.tool, kind: item.kind as FaultKind, calls: item.calls as number[] | undefined, retryAfterMs: item.retryAfterMs as number | undefined, message: item.message as string | undefined };
+  });
+  const plannedChecks = checkList.map((item, index): StateCheck => {
+    if (!isRecord(item) || typeof item.label !== 'string' || !item.label) throw new Error(`checks[${index}] needs a "label"`);
+    if (typeof item.tool !== 'string' || !item.tool) throw new Error(`checks[${index}] needs the "tool" that reads the server's state`);
+    if (item.args !== undefined && !isRecord(item.args)) throw new Error(`checks[${index}].args must be an object`);
+    if (typeof item.count !== 'string' || !item.count) throw new Error(`checks[${index}] needs "count", the text or pattern to count`);
+    try { new RegExp(item.count); } catch { throw new Error(`checks[${index}].count is not a valid regular expression`); }
+    const bound = (name: 'min' | 'max') => {
+      const value = item[name];
+      if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error(`checks[${index}].${name} must be a whole number, 0 or more`);
+      return value as number | undefined;
+    };
+    const min = bound('min'), max = bound('max');
+    // with no bound, every count would pass
+    if (min === undefined && max === undefined) throw new Error(`checks[${index}] needs "min", "max" or both`);
+    return { label: item.label, tool: item.tool, args: item.args as Record<string, unknown> | undefined, count: item.count, min, max };
+  });
+  return { faults: plannedFaults, checks: plannedChecks, surface: surface as Surface };
+}
+
+/** Reads the command-line form of a fault: `tool:kind` or `tool:kind@1,3` for specific call numbers. */
+export function parseFaultFlag(value: string): FaultSpec {
+  const at = value.lastIndexOf('@');
+  const target = at === -1 ? value : value.slice(0, at);
+  const colon = target.lastIndexOf(':');
+  if (colon < 1) throw new Error(`"${value}" should look like tool:kind or tool:kind@1,2`);
+  const calls = at === -1 ? undefined : value.slice(at + 1).split(',').map(Number);
+  return parsePlan({ faults: [{ tool: target.slice(0, colon), kind: target.slice(colon + 1), ...(calls && { calls }) }] }).faults[0]!;
+}
+
+function toFault(spec: FaultSpec): Fault {
+  const when = { calls: spec.calls };
+  // plain wording on purpose: a real timeout doesn't tell the agent that the outcome is unknown
+  const timeout = () => new ToolFailure('TIMEOUT', spec.message ?? 'Request timed out');
+  switch (spec.kind) {
+    case 'timeout-after-commit': return faults.timeoutAfterCommit({ ...when, error: timeout });
+    case 'timeout-before-commit': return faults.timeoutBeforeCommit({ ...when, error: timeout });
+    case 'rate-limit': return faults.rateLimit({ ...when, retryAfterMs: spec.retryAfterMs });
+    case 'malformed-response': return faults.malformedResponse({ ...when, replaceWith: () => ({ content: [] }) });
+  }
+}
+
+/** Marks an error that came from the real server, so it is passed on instead of being mistaken for an injected one. */
+class FromUpstream extends Error {
+  constructor(readonly original: unknown) { super('upstream error'); }
+}
+
+function textOf(result: CallToolResult): string {
+  const text = result.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
+  return text || JSON.stringify(result.structuredContent ?? result.content);
+}
+
+const describeRange = (min: number, max: number) =>
+  min === max ? String(min) : max === Infinity ? `at least ${min}` : min === 0 ? `at most ${max}` : `${min} to ${max}`;
+
+/** Starts an MCP server as a child process and connects to it. The child gets this process's environment. */
+export async function connectUpstream(command: string, args: string[] = [], options: { env?: Record<string, string>; cwd?: string } = {}): Promise<Client> {
+  const env = Object.fromEntries(Object.entries({ ...process.env, ...options.env }).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  const client = new Client({ name: 'faultline-mcp-proxy', version: VERSION });
+  await client.connect(new StdioClientTransport({ command, args, env, cwd: options.cwd, stderr: 'inherit' }));
+  return client;
+}
+
+export function createFaultProxy(options: { upstream: Client; faults?: FaultSpec[]; surface?: Surface; lab?: Lab }) {
+  const { upstream, surface = 'tool-error' } = options;
+  const planned = options.faults ?? [];
+  // real time by default, so a rate limit lasts as long as it says
+  const lab = options.lab ?? createLab({ clock: realClock });
+  const wrapped = new Map<string, (args: Record<string, unknown>) => Promise<CallToolResult>>();
+  let checked = false;
+
+  const toolFor = (name: string) => {
+    let tool = wrapped.get(name);
+    if (!tool) {
+      const forward = async (args: Record<string, unknown>) => {
+        try { return await upstream.callTool({ name, arguments: args }) as CallToolResult; }
+        catch (error) { throw new FromUpstream(error); }
+      };
+      tool = lab.tool(name, forward, ...planned.filter(spec => spec.tool === name).map(toFault));
+      wrapped.set(name, tool);
+    }
+    return tool;
+  };
+
+  /** Calls a tool the way the agent does: through the fault plan, and into the trace. */
+  async function callTool(name: string, args: Record<string, unknown> = {}): Promise<CallToolResult> {
+    try {
+      return await toolFor(name)(args);
+    } catch (error) {
+      if (error instanceof FromUpstream) throw error.original;
+      const limited = error instanceof ToolFailure && error.code === 'RATE_LIMIT';
+      const text = limited ? `Rate limit exceeded. Retry after ${(error as ToolFailure).retryAfterMs}ms.` : error instanceof Error ? error.message : String(error);
+      if (surface === 'protocol-error') {
+        // a bare error with a code: McpError would add its "MCP error" prefix twice on the way to the client
+        throw Object.assign(new Error(text), { code: limited ? ErrorCode.InternalError : ErrorCode.RequestTimeout });
+      }
+      return { isError: true, content: [{ type: 'text', text }] };
+    }
+  }
+
+  /** Every tool the server lists, across all pages. */
+  async function listTools(): Promise<Tool[]> {
+    const tools: Tool[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await upstream.listTools(cursor ? { cursor } : undefined);
+      tools.push(...page.tools);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return tools;
+  }
+
+  /** Asks the real server about its state, with no faults and no trace entry, and records the answer as a check. */
+  async function check(spec: StateCheck): Promise<void> {
+    checked = true;
+    const min = spec.min ?? 0, max = spec.max ?? Infinity;
+    try {
+      const result = await upstream.callTool({ name: spec.tool, arguments: spec.args ?? {} }) as CallToolResult;
+      const text = textOf(result);
+      const found = [...text.matchAll(new RegExp(spec.count, 'g'))].length;
+      lab.check(spec.label, !result.isError && found >= min && found <= max,
+        { expected: describeRange(min, max), actual: result.isError ? `${spec.tool} failed: ${text.slice(0, 200)}` : String(found) });
+    } catch (error) {
+      lab.check(spec.label, false, { expected: describeRange(min, max), actual: `${spec.tool} could not be called: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+
+  /** Planned faults the agent never ran into, such as a write it never made. */
+  function unusedFaults(): string[] {
+    const fired = new Set(lab.result().events.filter(event => event.kind === 'fault.injected').map(event => `${event.data.tool}#${event.data.call}`));
+    return planned.flatMap(spec => (spec.calls ?? [1]).filter(call => !fired.has(`${spec.tool}#${call}`)).map(call => `${spec.tool} call ${call} (${spec.kind})`));
+  }
+
+  /** The trace and checks so far. A run with no checks is reported as unchecked instead of passed. */
+  function report(): Report {
+    const result = lab.result();
+    if (!checked) return { status: 'unchecked', checks: [], events: result.events };
+    const unused = unusedFaults();
+    // a fault that never fired tested nothing, so the checks can't count as a pass
+    const fired: Check = { key: 'faults-fired', label: 'Every planned fault fired', passed: unused.length === 0, expected: 'all of them', actual: unused.length ? `never reached: ${unused.join(', ')}` : '' };
+    const checks = planned.length ? [...result.checks, fired] : result.checks;
+    return { status: checks.every(item => item.passed) ? 'passed' : 'failed', checks, events: result.events };
+  }
+
+  /** An MCP server that looks like the real one to the agent. Connect it to a transport. */
+  function server(): Server {
+    const info = upstream.getServerVersion();
+    const capabilities = upstream.getServerCapabilities() ?? {};
+    const proxy = new Server({ name: info?.name ?? 'faultline-mcp-proxy', version: info?.version ?? VERSION }, {
+      capabilities: { tools: {}, ...(capabilities.resources && { resources: {} }), ...(capabilities.prompts && { prompts: {} }) },
+      instructions: upstream.getInstructions(),
+    });
+    proxy.setRequestHandler(ListToolsRequestSchema, request => upstream.listTools(request.params));
+    proxy.setRequestHandler(CallToolRequestSchema, request => callTool(request.params.name, request.params.arguments ?? {}));
+    if (capabilities.resources) {
+      proxy.setRequestHandler(ListResourcesRequestSchema, request => upstream.listResources(request.params));
+      proxy.setRequestHandler(ListResourceTemplatesRequestSchema, request => upstream.listResourceTemplates(request.params));
+      proxy.setRequestHandler(ReadResourceRequestSchema, request => upstream.readResource(request.params));
+    }
+    if (capabilities.prompts) {
+      proxy.setRequestHandler(ListPromptsRequestSchema, request => upstream.listPrompts(request.params));
+      proxy.setRequestHandler(GetPromptRequestSchema, request => upstream.getPrompt(request.params));
+    }
+    return proxy;
+  }
+
+  return { lab, upstream, callTool, listTools, check, report, unusedFaults, server };
+}
+export type FaultProxy = ReturnType<typeof createFaultProxy>;
+
+/** Formats a report like `npm run faultline -- run`, for terminals and CI logs. */
+export function formatReport(report: Report): string {
+  return [
+    report.status === 'unchecked' ? 'UNCHECKED (no state checks were configured)' : report.status.toUpperCase(),
+    ...report.events.map(event => `  ${String(event.sequence).padStart(2, '0')}  +${event.timeMs}ms  ${event.message}`),
+    ...report.checks.map(item => `  ${item.passed ? '✓' : '✗'} ${item.label}${item.actual ? `: ${item.actual}` : ''}${!item.passed && item.expected ? ` (expected ${item.expected})` : ''}`),
+  ].join('\n');
+}

@@ -1,0 +1,23 @@
+{
+  "name": "faultline-mcp-proxy",
+  "version": "0.1.0",
+  "description": "Break an MCP server's tool calls on purpose, then check what the server really did.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "faultline-mcp-proxy": "./dist/cli.js" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist", "LICENSE", "NOTICE", "README.md"],
+  "engines": { "node": ">=20" },
+  "keywords": ["mcp", "model-context-protocol", "ai", "agents", "testing", "fault-injection", "idempotency"],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "faultline-sdk": "^0.1.0"
+  },
+  "scripts": {
+    "prepack": "cd ../.. && npm run build:mcp"
+  }
+}

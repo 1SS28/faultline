@@ -1,0 +1,215 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { createLab } from '../packages/sdk/src/index.js';
+import { createFaultProxy, formatReport, parseFaultFlag, parsePlan, type FaultSpec, type Surface } from '../packages/mcp/src/index.js';
+import { notesServer } from './fixtures/notes-server.js';
+
+// agent <-> proxy <-> notes server, all in this process. `notes` is the server's own state.
+async function setUp(faults: FaultSpec[] = [], surface?: Surface) {
+  const { server, notes } = notesServer();
+  const [serverSide, proxyUpstreamSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const upstream = new Client({ name: 'proxy-upstream', version: '1' });
+  await upstream.connect(proxyUpstreamSide);
+
+  const proxy = createFaultProxy({ upstream, faults, surface, lab: createLab() });
+  const [proxySide, agentSide] = InMemoryTransport.createLinkedPair();
+  await proxy.server().connect(proxySide);
+  const agent = new Client({ name: 'agent', version: '1' });
+  await agent.connect(agentSide);
+  const call = (name: string, args: Record<string, unknown> = {}) => agent.callTool({ name, arguments: args }) as Promise<CallToolResult>;
+  return { notes, proxy, agent, call };
+}
+const textOf = (result: CallToolResult) => result.content.map(block => block.type === 'text' ? block.text : '').join('');
+const oneNote = { label: 'The note exists exactly once', tool: 'list_notes', count: 'Buy milk', min: 1, max: 1 };
+
+test('with no faults the agent sees the real server unchanged', async () => {
+  const { agent, call, notes } = await setUp();
+  assert.deepEqual((await agent.listTools()).tools.map(tool => tool.name), ['create_note', 'create_note_once', 'list_notes']);
+  assert.equal(agent.getServerVersion()?.name, 'notes');
+  assert.equal(agent.getInstructions(), 'Keeps short notes.');
+  const created = await call('create_note', { title: 'Buy milk' });
+  assert.equal(created.isError, undefined);
+  assert.deepEqual(JSON.parse(textOf(created)), { id: 'note_1', title: 'Buy milk' });
+  assert.equal(notes.length, 1);
+});
+
+test('a lost reply looks like a failure to the agent although the server saved the note', async () => {
+  const { call, notes } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
+  const result = await call('create_note', { title: 'Buy milk' });
+  assert.equal(result.isError, true);
+  assert.equal(textOf(result), 'Request timed out');
+  assert.equal(notes.length, 1);
+});
+
+test('a retry after a lost reply makes a second note, and the state check catches it', async () => {
+  const { call, notes, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
+  // an agent that retries when a call fails
+  const first = await call('create_note', { title: 'Buy milk' });
+  if (first.isError) await call('create_note', { title: 'Buy milk' });
+
+  await proxy.check(oneNote);
+  const report = proxy.report();
+  assert.equal(notes.length, 2);
+  assert.equal(report.status, 'failed');
+  assert.equal(report.checks[0]?.actual, '2');
+  assert.match(formatReport(report), /create_note ran, but its response was lost/);
+  assert.match(formatReport(report), /✗ The note exists exactly once: 2 \(expected 1\)/);
+});
+
+test('the same retry is safe on a tool that takes an idempotency key', async () => {
+  const { call, notes, proxy } = await setUp([{ tool: 'create_note_once', kind: 'timeout-after-commit' }]);
+  const args = { title: 'Buy milk', key: 'milk-1' };
+  const first = await call('create_note_once', args);
+  const second = first.isError ? await call('create_note_once', args) : first;
+
+  await proxy.check(oneNote);
+  assert.equal(second.isError, undefined);
+  assert.equal(notes.length, 1);
+  assert.equal(proxy.report().status, 'passed', formatReport(proxy.report()));
+});
+
+test('a timeout before the call reaches the server leaves nothing behind', async () => {
+  const { call, notes } = await setUp([{ tool: 'create_note', kind: 'timeout-before-commit' }]);
+  assert.equal((await call('create_note', { title: 'Buy milk' })).isError, true);
+  assert.equal(notes.length, 0);
+});
+
+test('a fault can target a later call and carry its own message', async () => {
+  const { call, notes } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit', calls: [2], message: 'upstream connect error' }]);
+  assert.equal((await call('create_note', { title: 'One' })).isError, undefined);
+  const second = await call('create_note', { title: 'Two' });
+  assert.equal(textOf(second), 'upstream connect error');
+  assert.equal((await call('create_note', { title: 'Three' })).isError, undefined);
+  assert.equal(notes.length, 3);
+});
+
+test('a rate limit rejects calls until its window has passed', async () => {
+  const { call, notes, proxy } = await setUp([{ tool: 'create_note', kind: 'rate-limit', retryAfterMs: 500 }]);
+  assert.equal(textOf(await call('create_note', { title: 'Buy milk' })), 'Rate limit exceeded. Retry after 500ms.');
+  assert.equal((await call('create_note', { title: 'Buy milk' })).isError, true);
+  assert.equal(notes.length, 0);
+  await proxy.lab.wait(500);
+  assert.equal((await call('create_note', { title: 'Buy milk' })).isError, undefined);
+  assert.equal(notes.length, 1);
+});
+
+test('a malformed response is empty although the server saved the note', async () => {
+  const { call, notes } = await setUp([{ tool: 'create_note', kind: 'malformed-response' }]);
+  const result = await call('create_note', { title: 'Buy milk' });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.content, []);
+  assert.equal(notes.length, 1);
+});
+
+test('a fault can arrive as a protocol error instead of a tool result', async () => {
+  const { call, notes } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }], 'protocol-error');
+  await assert.rejects(call('create_note', { title: 'Buy milk' }), (error: { code?: number; message?: string }) => {
+    assert.equal(error.code, -32001);
+    assert.match(error.message ?? '', /Request timed out$/);
+    return true;
+  });
+  assert.equal(notes.length, 1);
+});
+
+test("the real server's own errors pass through untouched", async () => {
+  const { call } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit', calls: [5] }]);
+  const rejected = await call('create_note', {});
+  assert.equal(rejected.isError, true);
+  assert.equal(textOf(rejected), 'A note needs a title');
+  await assert.rejects(call('no_such_tool'), /Unknown tool: no_such_tool/);
+});
+
+test('a run with no state checks is reported as unchecked, not passed', async () => {
+  const { call, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
+  await call('create_note', { title: 'Buy milk' });
+  assert.equal(proxy.report().status, 'unchecked');
+  assert.match(formatReport(proxy.report()), /^UNCHECKED/);
+});
+
+test('checks cannot pass when a planned fault never fired', async () => {
+  const { call, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit', calls: [1, 2] }]);
+  // the agent made one write, so the fault planned for a second call never happened
+  await call('create_note_once', { title: 'Buy milk', key: 'milk-1' });
+  await call('create_note', { title: 'Call the bank' });
+  await proxy.check(oneNote);
+
+  const report = proxy.report();
+  assert.equal(report.checks[0]?.passed, true);
+  assert.equal(report.status, 'failed');
+  assert.match(formatReport(report), /✗ Every planned fault fired: never reached: create_note call 2 \(timeout-after-commit\)/);
+});
+
+test('a state check fails when its read tool cannot be called', async () => {
+  const { proxy } = await setUp();
+  await proxy.check({ ...oneNote, tool: 'no_such_tool' });
+  assert.equal(proxy.report().status, 'failed');
+  assert.match(proxy.report().checks[0]?.actual ?? '', /no_such_tool could not be called/);
+});
+
+test('plans are validated with messages that say what to fix', () => {
+  assert.deepEqual(parseFaultFlag('create_note:timeout-after-commit@1,3'), { tool: 'create_note', kind: 'timeout-after-commit', calls: [1, 3], retryAfterMs: undefined, message: undefined });
+  assert.deepEqual(parseFaultFlag('ns:create:rate-limit').tool, 'ns:create');
+  assert.throws(() => parseFaultFlag('create_note'), /should look like tool:kind/);
+  assert.throws(() => parseFaultFlag('create_note:explode'), /kind must be one of/);
+  assert.throws(() => parseFaultFlag('create_note:rate-limit@0'), /counting from 1/);
+  assert.throws(() => parsePlan({ checks: [{ label: 'x', tool: 'list_notes', count: 'milk' }] }), /needs "min", "max" or both/);
+  assert.throws(() => parsePlan({ checks: [{ label: 'x', tool: 'list_notes', count: '(', max: 1 }] }), /not a valid regular expression/);
+  assert.throws(() => parsePlan({ surface: 'loud' }), /"surface" must be one of/);
+});
+
+// the same story through the real command line: two child processes talking stdio
+const node = process.execPath;
+const cli = ['--import', 'tsx', 'packages/mcp/src/cli.ts'];
+const realServer = [node, '--import', 'tsx', 'tests/fixtures/notes-server.ts'];
+
+test('the command-line proxy injects the fault, checks the server and writes a report', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'faultline-mcp-'));
+  const config = join(folder, 'plan.json'), reportPath = join(folder, 'out', 'report.json');
+  await writeFile(config, JSON.stringify({ faults: [{ tool: 'create_note', kind: 'timeout-after-commit' }], checks: [oneNote] }));
+
+  const transport = new StdioClientTransport({ command: node, args: [...cli, '--config', config, '--report', reportPath, '--', ...realServer], stderr: 'pipe' });
+  const exited = new Promise<number | null>(resolve => { transport.onclose = () => resolve(null); });
+  const agent = new Client({ name: 'agent', version: '1' });
+  await agent.connect(transport);
+  assert.equal(agent.getServerVersion()?.name, 'notes');
+  const first = await agent.callTool({ name: 'create_note', arguments: { title: 'Buy milk' } }) as CallToolResult;
+  assert.equal(first.isError, true);
+  await agent.callTool({ name: 'create_note', arguments: { title: 'Buy milk' } });
+  await agent.close();
+  await exited;
+
+  const report = JSON.parse(await readFile(reportPath, 'utf8'));
+  assert.equal(report.status, 'failed');
+  assert.equal(report.checks[0].actual, '2');
+  assert.ok(report.events.some((event: { kind: string }) => event.kind === 'fault.injected'));
+});
+
+test('the command line refuses a plan that names a tool the server does not have', async () => {
+  const child = spawn(node, [...cli, '--fault', 'creat_note:timeout-after-commit', '--', ...realServer], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const code = await new Promise(resolve => child.on('exit', resolve));
+  assert.equal(code, 2);
+  assert.match(stderr, /the server has no tool named creat_note\. Its tools: create_note, create_note_once, list_notes/);
+});
+
+test('the command line exits 2 with usage when the plan is wrong', async () => {
+  const child = spawn(node, [...cli, '--fault', 'create_note:explode', '--', ...realServer], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '', stdout = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  const code = await new Promise(resolve => child.on('exit', resolve));
+  assert.equal(code, 2);
+  assert.match(stderr, /kind must be one of/);
+  // stdout belongs to the protocol
+  assert.equal(stdout, '');
+});
