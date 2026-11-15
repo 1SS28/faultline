@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { createFaultProxy, parsePlan, type Plan, type Report } from '../../packages/mcp/src/index.js';
+import { createFaultProxy, parsePlan, planTools, type Plan, type Report } from '../../packages/mcp/src/index.js';
 import type { ClaudeTransport } from '../agents/anthropic.js';
 import { defaultSystem, noUsage, runModelThroughProxy, type ModelRun, type Usage } from '../agents/mcp.js';
+import { readAfterFault, reviewAnswer, type AnswerReview, type Finding } from './answers.js';
 import { wilson95 } from './report.js';
 
 // $ per million tokens (claude-api skill table, cached 2026-11-03). Haiku's cache-read price is assumed at 0.1x input.
@@ -31,7 +32,7 @@ export function planForRun(raw: unknown, runId: string): { task: string; system:
   if (typeof system !== 'string' || !system.trim()) throw new Error('"system" must be text');
   const plan = parsePlan(filled);
   // the SDK's rule: a test with no checks proves nothing
-  if (!plan.checks.length) throw new Error('The plan needs at least one check on the server\'s state');
+  if (!plan.checks.length && !plan.trace.length) throw new Error('The plan needs at least one check, on the server\'s state or on the trace');
   return { task, system, plan };
 }
 
@@ -43,9 +44,13 @@ export interface TrialRecord extends ModelRun {
   events: Report['events'];
   usage: Usage;
   costUsd: number | null;
+  /** What the final answer claimed, set against the evidence. `null` when no judge was asked. It never changes `status`. */
+  answer: AnswerReview | null;
 }
 export interface McpEvaluation {
   model: string;
+  /** The task as the plan wrote it, with `{{run}}` still in place. */
+  task: string;
   /** Ends in a hash of the system prompt, the server's instructions, the task and the tool definitions, so a change to any of them is a new version. */
   agentVersion: string;
   server: string | null;
@@ -60,6 +65,8 @@ export interface McpEvaluation {
     confidence95: ReturnType<typeof wilson95> | null;
     stopReasons: Record<string, number>;
     usage: Usage; costUsd: number | null;
+    /** Counts of answers that disagreed with what happened. The judge's own calls are costed here, apart from the model under test. */
+    answers: { judge: string; reviewed: number; unreviewed: number; findings: Record<Finding, number>; usage: Usage; costUsd: number | null } | null;
   };
   trials: TrialRecord[];
 }
@@ -72,6 +79,8 @@ export interface McpEvaluation {
 export async function evaluateMcp(options: {
   upstream: Client; plan: unknown; transport: ClaudeTransport; model: string; trials: number;
   maxTurns: number; maxOutputTokens: number; maxResultChars?: number; serverInstructions?: boolean;
+  /** A second model that reads each final answer. It sees the task and the answer, never the trace or the server's state. */
+  judge?: { model: string; transport: ClaudeTransport };
   onTrial?: (record: TrialRecord) => void; runId?: () => string;
 }): Promise<McpEvaluation> {
   const { upstream, model, trials } = options;
@@ -79,9 +88,13 @@ export async function evaluateMcp(options: {
   if (trials > 1 && !JSON.stringify(options.plan).includes(placeholder)) {
     throw new Error(`With more than one trial the plan must use ${placeholder} in its task and checks. The server keeps what earlier trials wrote, so later trials would count their leftovers.`);
   }
-  const tools = (await createFaultProxy({ upstream }).listTools()).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+  const listed = await createFaultProxy({ upstream }).listTools();
+  const tools = listed.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+  // the server's own word for which tools only read
+  const readOnly = new Set(listed.filter(tool => tool.annotations?.readOnlyHint).map(tool => tool.name));
+  const judgeUsage = noUsage();
   const known = new Set(tools.map(tool => tool.name));
-  const unknown = [...new Set([...template.plan.faults, ...template.plan.checks].map(item => item.tool).filter(name => !known.has(name)))];
+  const unknown = planTools(template.plan).filter(name => !known.has(name));
   if (unknown.length) throw new Error(`The server has no tool named ${unknown.join(', ')}. Its tools: ${[...known].join(', ')}`);
 
   const server = upstream.getServerVersion();
@@ -102,8 +115,13 @@ export async function evaluateMcp(options: {
       const run = await runModelThroughProxy({ proxy, transport: options.transport, model, system: withGuidance(system), task, usage,
         maxTurns: options.maxTurns, maxOutputTokens: options.maxOutputTokens, maxResultChars: options.maxResultChars });
       for (const check of plan.checks) await proxy.check(check);
+      for (const check of plan.trace) proxy.checkTrace(check);
       const report = proxy.report();
-      const record: TrialRecord = { trial, runId, status: report.status, ...run, checks: report.checks, events: report.events, usage, costUsd: estimateCost(model, usage) };
+      // state checks are recorded first, ahead of trace checks and the fault check
+      const stateOk = plan.checks.length ? report.checks.slice(0, plan.checks.length).every(check => check.passed) : null;
+      const answer = options.judge ? await reviewAnswer({ ...options.judge, task, answer: run.finalText, usage: judgeUsage,
+        evidence: { stateOk, readAfterFault: readAfterFault(report.events, readOnly) } }) : null;
+      const record: TrialRecord = { trial, runId, status: report.status, ...run, checks: report.checks, events: report.events, usage, costUsd: estimateCost(model, usage), answer };
       records.push(record);
       options.onTrial?.(record);
     } catch (error) {
@@ -118,14 +136,21 @@ export async function evaluateMcp(options: {
     for (const key of Object.keys(sum) as Array<keyof Usage>) sum[key] += record.usage[key];
     return sum;
   }, { ...(interruptedTrial?.usage ?? noUsage()) });
+  const reviews = records.flatMap(record => record.answer ? [record.answer] : []);
+  const count = (finding: Finding) => reviews.filter(review => review.findings.includes(finding)).length;
+  const answers = options.judge ? {
+    judge: options.judge.model, reviewed: reviews.filter(review => review.claims).length, unreviewed: reviews.filter(review => !review.claims).length,
+    findings: { 'claimed-success': count('claimed-success'), 'claimed-check': count('claimed-check'), 'denied-success': count('denied-success') },
+    usage: judgeUsage, costUsd: estimateCost(options.judge.model, judgeUsage),
+  } : null;
   return {
-    model, agentVersion: `anthropic/${model}@${hash.slice(0, 8)}`, server: server ? `${server.name} ${server.version}` : null, serverInstructions: guidance,
+    model, task: template.task, agentVersion: `anthropic/${model}@${hash.slice(0, 8)}`, server: server ? `${server.name} ${server.version}` : null, serverInstructions: guidance,
     plannedTrials: trials, completedTrials: records.length, executionError, interruptedTrial,
     summary: {
       trials: records.length, passed, passRate: records.length ? Math.round(passed / records.length * 10000) / 100 : null,
       confidence95: records.length ? wilson95(passed, records.length) : null,
       stopReasons: records.reduce<Record<string, number>>((counts, record) => { counts[record.stopReason] = (counts[record.stopReason] ?? 0) + 1; return counts; }, {}),
-      usage: total, costUsd: estimateCost(model, total),
+      usage: total, costUsd: estimateCost(model, total), answers,
     },
     trials: records,
   };

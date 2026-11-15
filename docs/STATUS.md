@@ -11,7 +11,7 @@
 - Claude (Messages API) and OpenAI (Responses API) adapters sharing one prompt, tool set and argument validation, with bounded model calls and output, explicit model selection, prompt fingerprints, and usage metadata. A live trial stops once the simulated tool's call budget is spent.
 - An SDK (`packages/sdk`, Apache-2.0, no dependencies) that injects the same four kinds of fault into any tool function, with checks written against the user's own service. It builds as the `faultline-sdk` package.
 - An MCP proxy (`packages/mcp`, Apache-2.0) that sits between an agent and any stdio MCP server, injects the same four faults into chosen tool calls, and then checks the server's state through its own read tools. It builds as `faultline-mcp-proxy`.
-- A runner (`npm run evaluate:mcp`) that drives a Claude model through that proxy against an MCP server for repeated trials, with a fresh id per trial so runs on one account don't collide.
+- A runner (`npm run evaluate:mcp`) that drives a Claude model through that proxy against an MCP server for repeated trials, with a fresh id per trial so runs on one account don't collide. Plans can check the server's state and the trace of what the model did. With `--judge`, a second model reads each final answer and the runner compares its claims with the evidence.
 - Repeated-trial CLI and JSON reports covering per-scenario pass rates, assertion counts, and Wilson intervals for live trials only.
 - Local PostgreSQL adapter and Compose file.
 - CI on GitHub runs the build, tests, demo, regression command, and a fixture evaluation, and passes.
@@ -29,7 +29,7 @@
 
 - Subprocesses isolate trusted fixtures. They are not a security sandbox, and arbitrary uploaded code is not accepted.
 - Live evaluations run through the CLI, separately from the fixture queue. An interrupted live trial keeps the usage metadata known at that point but loses its partial tool trace.
-- The MCP runner checks only the server's state. It can't fail a trial for what the trace shows, such as calls inside a rate-limit window, and it records the model's final answer without scoring it. It has no cleanup between trials and no cost limit.
+- The MCP runner has no cleanup between trials and no cost limit, and a check can't look up something a trial created by its id. The answer review depends on a judge model. On saved answers, `claude-sonnet-5-5` as the judge raised 26 of the 27 false claims of success found by hand and `claude-haiku-5-5` raised 23, and neither raised one wrongly, but the judge's instructions were tuned on those same answers.
 - The AWS API has one shared API key. Per-user authentication, tenant isolation, container deployment, and outside validation are still open.
 
 ## Running locally

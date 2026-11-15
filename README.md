@@ -118,7 +118,7 @@ npx tsx packages/mcp/src/cli.ts --config plan.json --report report.json -- npx -
 
 Tool calls still reach the real server, so point it at a test account. See `packages/mcp/README.md` for the plan file, the faults and the limits.
 
-To put a Claude model on the other side instead of your own agent, `npm run evaluate:mcp` runs repeated trials of one task through the proxy and reports a pass rate. See `docs/LIVE-EVALUATION.md`.
+To put a Claude model on the other side instead of your own agent, `npm run evaluate:mcp` runs repeated trials of one task through the proxy and reports a pass rate. It can also check the trace of what the model did, and have a second model read the final answer so its claims can be compared with what happened. See `docs/LIVE-EVALUATION.md`.
 
 ## What the results mean
 

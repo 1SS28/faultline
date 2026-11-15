@@ -15,7 +15,7 @@ export function notesServer() {
     { name: 'create_note', description: 'Create a note.', inputSchema: { type: 'object' as const, properties: { title }, required: ['title'] } },
     { name: 'create_note_once', description: 'Create a note. Calls with the same key create it once.',
       inputSchema: { type: 'object' as const, properties: { title, key: { type: 'string' } }, required: ['title', 'key'] } },
-    { name: 'list_notes', description: 'List every note.', inputSchema: { type: 'object' as const, properties: {} } },
+    { name: 'list_notes', description: 'List every note.', inputSchema: { type: 'object' as const, properties: {} }, annotations: { readOnlyHint: true } },
   ] }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     const { name, arguments: args = {} } = request.params;

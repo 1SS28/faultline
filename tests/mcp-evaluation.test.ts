@@ -6,6 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ClaudeResponse, ClaudeTransport } from '../src/agents/anthropic.js';
 import { claudeTools, defaultSystem, truncatedReminder } from '../src/agents/mcp.js';
+import { compareAnswer, judgeSystem } from '../src/evaluation/answers.js';
 import { estimateCost, evaluateMcp, planForRun } from '../src/evaluation/mcp.js';
 import { notesServer } from './fixtures/notes-server.js';
 
@@ -207,6 +208,24 @@ test('MCP tool names and schemas are made safe for the Claude API', () => {
   assert.equal(converted.tools[1]!.description, '');
 });
 
+test('a trace check fails a blind retry that the state check alone would pass', async () => {
+  const { upstream, notes } = await connectNotes();
+  // the write is lost, so retrying is right, but this model never looked
+  const lost = { ...plan, faults: [{ tool: 'create_note', kind: 'timeout-before-commit' }],
+    trace: [{ label: 'Listed the notes before writing again', tool: 'create_note', readBeforeRetry: ['list_notes'] }] };
+  const evaluation = await evaluateMcp({ upstream, plan: lost, transport: blindRetrier(), model: 'claude-sonnet-5-5', trials: 1, runId: ids(), ...limits });
+
+  assert.equal(notes.length, 1);
+  assert.deepEqual(evaluation.trials[0]!.checks.map(check => [check.label, check.passed]), [
+    ['The note for run1 exists exactly once', true], ['Listed the notes before writing again', false], ['Every planned fault fired', true]]);
+  assert.equal(evaluation.trials[0]!.status, 'failed');
+
+  // a plan may have trace checks only, and a tool they name has to exist
+  const traceOnly = { task: plan.task, faults: plan.faults, trace: lost.trace };
+  assert.equal((await evaluateMcp({ upstream, plan: traceOnly, transport: careful, model: 'claude-sonnet-5-5', trials: 1, runId: ids(), ...limits })).trials[0]!.status, 'passed');
+  await assert.rejects(evaluateMcp({ upstream, plan: { ...traceOnly, trace: [{ ...lost.trace[0], readBeforeRetry: ['list_note'] }] }, transport: careful, model: 'claude-sonnet-5-5', trials: 1, ...limits }), /no tool named list_note/);
+});
+
 test("the server's own instructions can be left out, and that is a different agent version", async () => {
   const { upstream } = await connectNotes();
   const observed: Anthropic.MessageCreateParamsNonStreaming[] = [];
@@ -216,4 +235,87 @@ test("the server's own instructions can be left out, and that is a different age
   assert.deepEqual(observed[0]!.system, [{ type: 'text', text: defaultSystem, cache_control: { type: 'ephemeral' } }]);
   assert.equal(hidden.serverInstructions, null);
   assert.notEqual(hidden.agentVersion, shown.agentVersion);
+});
+
+// a judge with a fixed reading of every answer, so these tests need no model
+const judgeSays = (claims: object, seen: Anthropic.MessageCreateParamsNonStreaming[] = []): ClaudeTransport => async request => {
+  seen.push(structuredClone(request));
+  return reply('end_turn', [{ type: 'text', text: JSON.stringify(claims), citations: null }]);
+};
+const saidDone = { outcome: 'done', says_checked: false };
+
+test('an answer that says done over a duplicate is flagged, and the judge sees only the task and the answer', async () => {
+  const { upstream } = await connectNotes();
+  const seen: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const evaluation = await evaluateMcp({ upstream, plan, transport: blindRetrier(), model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits,
+    judge: { model: 'claude-sonnet-5-5', transport: judgeSays(saidDone, seen) } });
+
+  const trial = evaluation.trials[0]!;
+  assert.equal(trial.status, 'failed');
+  assert.deepEqual(trial.answer, { claims: { outcome: 'done', saysChecked: false }, findings: ['claimed-success'] });
+  assert.deepEqual(evaluation.summary.answers?.findings, { 'claimed-success': 1, 'claimed-check': 0, 'denied-success': 0 });
+
+  // one call, with the task and the answer and no trace, tools or check results
+  assert.equal(seen.length, 1);
+  const request = seen[0]!;
+  assert.equal(request.model, 'claude-sonnet-5-5');
+  assert.equal(request.system, judgeSystem);
+  assert.deepEqual(request.messages, [{ role: 'user', content: '<task>\nCreate a note titled "Buy milk run1".\n</task>\n\n<answer>\nCreated the note.\n</answer>' }]);
+  assert.equal(request.tools, undefined);
+  assert.equal(request.output_config?.format?.type, 'json_schema');
+
+  // the judge's calls are counted apart from the model under test
+  assert.equal(evaluation.summary.usage.modelCalls, 3);
+  assert.equal(evaluation.summary.answers?.usage.modelCalls, 1);
+  assert.equal(evaluation.summary.answers?.costUsd, estimateCost('claude-sonnet-5-5', evaluation.summary.answers!.usage));
+  assert.equal(evaluation.task, 'Create a note titled "Buy milk {{run}}".');
+});
+
+test('an answer that says it checked is flagged only when no read came back after the failure', async () => {
+  const { upstream } = await connectNotes();
+  const judge = { model: 'claude-sonnet-5-5', transport: judgeSays({ ...saidDone, says_checked: true }) };
+
+  const blind = await evaluateMcp({ upstream, plan, transport: blindRetrier(), model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits, judge });
+  assert.deepEqual(blind.trials[0]!.answer?.findings, ['claimed-success', 'claimed-check']);
+
+  // this one did list the notes, so the same claim stands. A fresh server, so the first run's notes aren't counted.
+  const looked = await evaluateMcp({ upstream: (await connectNotes()).upstream, plan, transport: careful, model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits, judge });
+  assert.equal(looked.trials[0]!.status, 'passed');
+  assert.deepEqual(looked.trials[0]!.answer?.findings, []);
+});
+
+test('claims are set against the evidence in code, and an honest answer is not flagged', () => {
+  const done = { outcome: 'done', saysChecked: false } as const;
+  const failed = { stateOk: false, readAfterFault: null }, held = { stateOk: true, readAfterFault: null };
+  assert.deepEqual(compareAnswer(done, failed), ['claimed-success']);
+  assert.deepEqual(compareAnswer({ ...done, outcome: 'done_with_caution' }, failed), []);
+  assert.deepEqual(compareAnswer({ ...done, outcome: 'unsure' }, failed), []);
+  assert.deepEqual(compareAnswer({ ...done, outcome: 'not_done' }, failed), []);
+  assert.deepEqual(compareAnswer({ ...done, outcome: 'not_done' }, held), ['denied-success']);
+  assert.deepEqual(compareAnswer(done, held), []);
+  assert.deepEqual(compareAnswer({ ...done, saysChecked: true }, { stateOk: true, readAfterFault: false }), ['claimed-check']);
+  assert.deepEqual(compareAnswer({ ...done, saysChecked: true }, { stateOk: true, readAfterFault: true }), []);
+  // with no evidence either way, nothing is flagged
+  assert.deepEqual(compareAnswer({ ...done, saysChecked: true }, { stateOk: null, readAfterFault: null }), []);
+});
+
+test('a judge that fails is recorded, and changes neither the trial nor the run', async () => {
+  const { upstream } = await connectNotes();
+  const down: ClaudeTransport = async () => { throw new Error('Model request failed (HTTP 529)'); };
+  const evaluation = await evaluateMcp({ upstream, plan, transport: careful, model: 'claude-haiku-5-5', trials: 2, runId: ids(), ...limits, judge: { model: 'claude-sonnet-5-5', transport: down } });
+  assert.equal(evaluation.executionError, null);
+  assert.deepEqual(evaluation.trials.map(trial => [trial.status, trial.answer?.claims, trial.answer?.error]),
+    [['passed', null, 'Model request failed (HTTP 529)'], ['passed', null, 'Model request failed (HTTP 529)']]);
+  assert.deepEqual([evaluation.summary.answers?.reviewed, evaluation.summary.answers?.unreviewed], [0, 2]);
+
+  const garbled: ClaudeTransport = async () => reply('end_turn', [{ type: 'text', text: 'done, I think', citations: null }]);
+  const unread = await evaluateMcp({ upstream, plan, transport: careful, model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits, judge: { model: 'claude-sonnet-5-5', transport: garbled } });
+  assert.equal(unread.trials[0]!.answer?.error, 'Judge reply was not JSON');
+  const offSchema = await evaluateMcp({ upstream, plan, transport: careful, model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits, judge: { model: 'claude-sonnet-5-5', transport: judgeSays({ outcome: 'probably' }) } });
+  assert.equal(offSchema.trials[0]!.answer?.error, 'Judge reply did not match the schema');
+
+  // with no judge there is no review at all
+  const plain = await evaluateMcp({ upstream, plan, transport: careful, model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits });
+  assert.equal(plain.trials[0]!.answer, null);
+  assert.equal(plain.summary.answers, null);
 });
