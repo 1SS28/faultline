@@ -19,9 +19,9 @@
 
 ## Not verified
 
-- Only one live model has run. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On `timeout-no-key` it escalated in 10 of 10 trials with the baseline prompt, and refunded twice in 10 of 10 with the recovery prompt. After the recovery prompt was fixed, it passed 30 of 30 across all five scenarios. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
+- Only one live model has run the refund scenarios. `claude-sonnet-5-5` passed all 40 trials of the first four scenarios. On `timeout-no-key` it escalated in 10 of 10 trials with the baseline prompt, and refunded twice in 10 of 10 with the recovery prompt. After the recovery prompt was fixed, it passed 30 of 30 across all five scenarios. The OpenAI adapter hasn't made a live call. See LIVE-EVALUATION.md.
 - No team outside this project has used the SDK. It is published on npm as `faultline-sdk`, and its results don't appear in the dashboard.
-- The MCP proxy has run against the test server in `tests/fixtures`, the official MCP memory server, which handled a retried write correctly, and GitHub's MCP server on a private test repository. It hasn't found a bug in a real server, and it isn't on npm. On GitHub's server a dropped reply to `issue_write` led `claude-haiku-5-5` to create a duplicate issue in 9 of 10 trials, because the search it used to check was a few seconds behind, while `claude-sonnet-5-5` passed 3 of 3. That is one repository, one task and small samples, and the failure is delivered the moment the write lands, which is the worst case for a read that lags. See `docs/LIVE-EVALUATION.md`.
+- The MCP proxy has run against the test server in `tests/fixtures`, the official MCP memory server, which handled a retried write correctly, and GitHub's MCP server on a private test repository. It hasn't found a bug in a real server, and it isn't on npm. On GitHub's server a dropped reply to `issue_write` led `claude-haiku-5-5` to create a duplicate issue in 9 of 10 trials, because the search it used to check was a few seconds behind, while `claude-sonnet-5-5` passed 3 of 3. That is one repository, one task and small samples, and the failure is delivered the moment the write lands, which is the worst case for a read that lags. Five more plans covered the other faults on the same server: a lost write, an empty reply, a rate limit, a two-step task and a broken read. Haiku passed between 1 and 10 of 10, and Sonnet failed the broken read 0 of 3. See `docs/LIVE-EVALUATION.md`.
 - Docker is unrun. Networked PostgreSQL has run, since the AWS worker and API use RDS, but workers competing for the same jobs on a real server haven't been tested. Existing concurrency tests use the embedded engine's single connection.
 - The AWS deployment in `infra/` runs fixture trials only. Live model runs stay local, and deploys are manual. See `infra/README.md`.
 
@@ -29,6 +29,7 @@
 
 - Subprocesses isolate trusted fixtures. They are not a security sandbox, and arbitrary uploaded code is not accepted.
 - Live evaluations run through the CLI, separately from the fixture queue. An interrupted live trial keeps the usage metadata known at that point but loses its partial tool trace.
+- The MCP runner checks only the server's state. It can't fail a trial for what the trace shows, such as calls inside a rate-limit window, and it records the model's final answer without scoring it. It has no cleanup between trials and no cost limit.
 - The AWS API has one shared API key. Per-user authentication, tenant isolation, container deployment, and outside validation are still open.
 
 ## Running locally

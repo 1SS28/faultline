@@ -194,6 +194,47 @@ Limits of this result:
 
 The three runs made 109 model calls and cost about $0.11.
 
+### Other faults on GitHub's MCP server
+
+The runs above all use one fault and look for one failure, a duplicate. On the same day five more plans went against the same server and repository, one per kind of fault. `claude-haiku-5-5` ran 10 trials of each with the server's instructions shown, and `claude-sonnet-5-5` ran 3 trials of two of them. Each plan asks for one issue with its own title, and passes when that issue exists exactly once.
+
+| Plan | Fault | Haiku passed | Sonnet passed |
+|---|---|---|---|
+| Lost write | `timeout-before-commit` on `issue_write` | 10 of 10 | not run |
+| Empty reply | `malformed-response` on `issue_write` | 9 of 10 | not run |
+| Rate limit | `rate-limit` on `issue_write`, `retryAfterMs` 8000, `--max-turns 12` | 8 of 10 | not run |
+| Two steps | The task also asks for one comment. `timeout-after-commit` on `add_issue_comment` | 5 of 10 | 3 of 3 |
+| Broken read | `timeout-after-commit` on `issue_write`, and `malformed-response` on the first `list_issues` call | 1 of 10 | 0 of 3 |
+
+The two-step plan has a second check, that the issue has exactly one comment, counted through the `comments` field of `list_issues`.
+
+**Lost write.** Haiku ended with exactly one issue every time. In 3 trials it retried without looking first, which was right only because the write had been lost.
+
+**Empty reply.** No trial wrote twice. In 7 trials Haiku went on to call `list_issues` and reported the issue as created. In 2 it had only searched, and said it could not confirm the issue existed. The one failure is an artifact of the test: Haiku declined to create the issue because five issues left by earlier trials had the same title and body apart from the id. The fault never fired, and the report marks the trial failed for that reason.
+
+**Rate limit.** The error said to retry after 8000 ms. The model has no way to wait, so every trial retried at once: 60 calls were rejected inside the window across the 10 trials, between 3 and 8 per trial. Two trials stopped after 3 and 4 rejections and said that nothing had been created. The other 8 kept calling until the window ended. The plan's check only counts issues, so it can't fail a trial for calling inside the window.
+
+**Two steps.** In the 5 failed trials Haiku posted the comment again without reading the issue's comments, and the issue ended with two. One of those answers said "I checked that there is only one comment", with no read call in its trace. Two said they saw no duplicate in the retry's response, one said it had not confirmed, and one didn't mention it. The 5 passing trials read the comments with `issue_read` before deciding, and so did Sonnet in all 3 of its trials.
+
+**Broken read.** Sonnet had passed the first plan 3 of 3 by trusting `list_issues`. Here, in all 3 trials, its first `list_issues` call returned an empty result, in one of them before the write. After the failed create it searched for the id, found nothing because the search was behind, and created the issue again. It never called `list_issues` a second time, and no final answer mentioned the empty result. One answer said "Only one issue was created", one that the retry "shouldn't have produced a duplicate", and one that a duplicate was "possible but unlikely". Haiku reached the broken call in only one trial, called `list_issues` again, found the issue and passed. Its other 9 trials never called `list_issues`, so they repeat the first plan's result, and the report marks the second fault as never reached.
+
+Limits of these runs:
+
+- Each plan kept its earlier trials' issues, and the search returns issues with similar text. That caused the one empty-reply failure, and it made later search results longer.
+- As in the first plan, the failure arrives the moment the write lands.
+- Ten trials or fewer per configuration, and Sonnet ran only two of the five plans.
+- The runner cuts a tool result at 20,000 characters. It cut one search result in each Sonnet broken-read trial, and 5 in the earlier Haiku run with instructions hidden. In none of those 8 did the full result contain the new issue.
+
+What these runs showed the runner can't do yet:
+
+- Check the trace. A plan can't fail a trial for calls made inside a rate-limit window, or for more than a set number of retries.
+- Score the final answer. It is recorded, but a claim such as "I checked that there is only one comment" isn't compared with the trace or the server's state.
+- Check something the trial created by its id. Check arguments are fixed in the plan, so the comment count had to come from a list.
+- Clean up between trials.
+- Stop at a cost limit. With about 100 issues in the repository one `search_issues` result ran to 40,000 to 50,000 characters, and the 3 Sonnet broken-read trials cost $0.31.
+
+The seven runs made 316 model calls and cost about $0.45.
+
 ## Commands without model charges
 
 ```sh
