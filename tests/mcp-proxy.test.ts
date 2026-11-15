@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLab } from '../packages/sdk/src/index.js';
-import { createFaultProxy, formatReport, parseFaultFlag, parsePlan, planTools, type FaultSpec, type Surface } from '../packages/mcp/src/index.js';
+import { createFaultProxy, formatReport, parseFaultFlag, parsePlan, planTools, runSteps, type FaultSpec, type Step, type Surface } from '../packages/mcp/src/index.js';
 import { notesServer } from './fixtures/notes-server.js';
 
 // agent <-> proxy <-> notes server, all in this process. `notes` is the server's own state.
@@ -33,7 +33,7 @@ const oneNote = { label: 'The note exists exactly once', tool: 'list_notes', cou
 
 test('with no faults the agent sees the real server unchanged', async () => {
   const { agent, call, notes } = await setUp();
-  assert.deepEqual((await agent.listTools()).tools.map(tool => tool.name), ['create_note', 'create_note_once', 'list_notes']);
+  assert.deepEqual((await agent.listTools()).tools.map(tool => tool.name), ['create_note', 'create_note_once', 'list_notes', 'delete_note']);
   assert.equal(agent.getServerVersion()?.name, 'notes');
   assert.equal(agent.getInstructions(), 'Keeps short notes.');
   const created = await call('create_note', { title: 'Buy milk' });
@@ -170,9 +170,44 @@ test('plans are validated with messages that say what to fix', () => {
   assert.throws(() => parsePlan({ trace: [{ label: 'x', tool: 'create_note', readBeforeRetry: [] }] }), /must list tool names/);
   const withTrace = parsePlan({ faults: [{ tool: 'create_note', kind: 'rate-limit' }], trace: [{ label: 'x', tool: 'create_note_once', readBeforeRetry: ['list_notes'] }] });
   assert.deepEqual(planTools(withTrace), ['create_note', 'create_note_once', 'list_notes']);
+  assert.throws(() => parsePlan({ cleanup: [{ args: {} }] }), /cleanup\[0\] needs a "tool" name/);
+  assert.throws(() => parsePlan({ setup: [{ tool: 'delete_note', forEach: { tool: 'list_notes' } }] }), /setup\[0\]\.forEach needs "match"/);
+  assert.throws(() => parsePlan({ cleanup: [{ tool: 'delete_note', forEach: { tool: 'list_notes', match: '(' } }] }), /not a valid regular expression/);
+  assert.deepEqual(planTools(parsePlan({ setup: [{ tool: 'create_note' }], cleanup: [deleteAll] })), ['create_note', 'delete_note', 'list_notes']);
 });
 
 const looked = { label: 'Looked before writing again', tool: 'create_note', readBeforeRetry: ['list_notes'] };
+// deletes every note the server lists
+const deleteAll: Step = { tool: 'delete_note', args: { id: '{{match}}' }, forEach: { tool: 'list_notes', match: '"id":"(note_\\d+)"' } };
+
+test('setup and cleanup steps reach the real server, outside the fault plan and the trace', async () => {
+  const { call, notes, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
+  assert.equal(await runSteps(proxy.upstream, [{ tool: 'create_note', args: { title: 'Already here' } }]), 1);
+  // the setup call didn't use up the fault planned for the agent's first call
+  assert.equal((await call('create_note', { title: 'Buy milk' })).isError, true);
+  await call('create_note', { title: 'Buy milk' });
+  assert.deepEqual(notes.map(note => note.title), ['Already here', 'Buy milk', 'Buy milk']);
+
+  // one listing call, then one delete for each of the three notes
+  assert.equal(await runSteps(proxy.upstream, [deleteAll]), 4);
+  assert.equal(notes.length, 0);
+  assert.deepEqual(proxy.report().events.filter(event => event.kind === 'tool.request').map(event => event.data.tool), ['create_note', 'create_note']);
+});
+
+test('a step that fails says which tool, and a numeric match stays a number', async () => {
+  const { proxy } = await setUp();
+  await assert.rejects(runSteps(proxy.upstream, [{ tool: 'delete_note', args: { id: 'note_9' } }]), /delete_note failed: No note with id note_9/);
+  await assert.rejects(runSteps(proxy.upstream, [{ tool: 'no_such_tool' }]), /no_such_tool/);
+
+  const sent: unknown[] = [];
+  const server = { callTool: async (request: { name: string; arguments?: Record<string, unknown> }) => {
+    sent.push(request.arguments);
+    return { content: [{ type: 'text' as const, text: request.name === 'list' ? '#12 open, #40 open, #12 open' : 'ok' }] };
+  } };
+  await runSteps(server as never, [{ tool: 'close', args: { number: '{{match}}', note: 'closing #{{match}}', tags: ['{{match}}'] }, forEach: { tool: 'list', match: '#(\\d+)' } }]);
+  // each distinct match once
+  assert.deepEqual(sent.slice(1), [{ number: 12, note: 'closing #12', tags: [12] }, { number: 40, note: 'closing #40', tags: [40] }]);
+});
 
 test('a trace check counts how often a write reached the server, with no read tool involved', async () => {
   const { call, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
@@ -243,12 +278,14 @@ const realServer = [node, '--import', 'tsx', 'tests/fixtures/notes-server.ts'];
 test('the command-line proxy injects the fault, checks the server and writes a report', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'faultline-mcp-'));
   const config = join(folder, 'plan.json'), reportPath = join(folder, 'out', 'report.json');
-  await writeFile(config, JSON.stringify({ faults: [{ tool: 'create_note', kind: 'timeout-after-commit' }], checks: [oneNote], trace: [looked] }));
+  await writeFile(config, JSON.stringify({ faults: [{ tool: 'create_note', kind: 'timeout-after-commit' }], checks: [oneNote], trace: [looked], cleanup: [deleteAll] }));
 
   const transport = new StdioClientTransport({ command: node, args: [...cli, '--config', config, '--report', reportPath, '--', ...realServer], stderr: 'pipe' });
   const exited = new Promise<number | null>(resolve => { transport.onclose = () => resolve(null); });
   const agent = new Client({ name: 'agent', version: '1' });
   await agent.connect(transport);
+  let stderr = '';
+  transport.stderr?.on('data', chunk => { stderr += chunk; });
   assert.equal(agent.getServerVersion()?.name, 'notes');
   const first = await agent.callTool({ name: 'create_note', arguments: { title: 'Buy milk' } }) as CallToolResult;
   assert.equal(first.isError, true);
@@ -260,6 +297,8 @@ test('the command-line proxy injects the fault, checks the server and writes a r
   assert.equal(report.status, 'failed');
   assert.equal(report.checks[0].actual, '2');
   assert.deepEqual([report.checks[1].label, report.checks[1].passed], ['Looked before writing again', false]);
+  // the checks ran first and saw both notes; then the cleanup listed them and deleted each
+  assert.match(stderr, /Cleanup made 3 calls/);
   assert.ok(report.events.some((event: { kind: string }) => event.kind === 'fault.injected'));
 });
 

@@ -55,6 +55,8 @@ function resultText(result: CallToolResult, limit: number): { text: string; clip
 export async function runModelThroughProxy(options: {
   proxy: Pick<FaultProxy, 'listTools' | 'callTool'>; transport: ClaudeTransport; model: string; system: string; task: string;
   maxTurns: number; maxOutputTokens: number; maxResultChars?: number; timeoutMs?: number; usage?: Usage;
+  /** Called before every model request. Throwing here stops the run, which is how a cost limit is enforced. */
+  beforeCall?: () => void;
 }): Promise<ModelRun> {
   const { proxy, transport, usage = noUsage(), maxResultChars = 20_000 } = options;
   const signal = AbortSignal.timeout(options.timeoutMs ?? 180_000);
@@ -67,6 +69,7 @@ export async function runModelThroughProxy(options: {
 
   for (let turn = 0; turn < options.maxTurns; turn++) {
     signal.throwIfAborted();
+    options.beforeCall?.();
     const response = await transport({ model: options.model, max_tokens: options.maxOutputTokens, system, tools, messages }, signal);
     usage.modelCalls++;
     usage.inputTokens += response.usage.input_tokens;

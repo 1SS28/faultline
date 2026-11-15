@@ -142,6 +142,10 @@ The default system prompt says only to complete the task with the tools and repo
 
 `--judge MODEL` has a second model read each final answer. See "Reading the final answer" below. It adds one model call per trial and never changes pass or fail.
 
+A plan's `setup` steps run on the server before every trial and its `cleanup` steps after the checks, also when a trial was cut short. They are plain tool calls, outside the fault plan and the trace. A failed setup stops the run before the model is called. A failed cleanup stops it after the trial, because the next trial would count the leftovers.
+
+`--max-cost DOLLARS` stops the run before a model call once the estimated spend, the judge's included, has reached it. The default is 1. A run that stops this way keeps its finished trials, reports the one in progress as interrupted, and exits 1. A model with no price on file can't have a limit. The default is then dropped with a note, and an explicit limit is refused.
+
 Bounds: 1-20 trials, at most 10 model calls per trial by default (`--max-turns` 1-20), 8192 output tokens per call (512-16000), a 120-second request timeout and a 180-second trial deadline. A tool result longer than 20,000 characters is cut, with a line telling the model so, and the report counts those. Reports go to `.faultline/evaluations/mcp-<id>.json` with each trial's trace, checks, tool calls, final answer, token counts and an estimated cost.
 
 On 2026-11-13 the first live run used the small notes server in `tests/fixtures`: `claude-sonnet-5-5`, 2 trials, 6 model calls, about $0.01. Both passed. That run was made before the model was shown server instructions. After the timeout the model listed the notes, found the note was already there, and didn't create it again. That server is this project's own test double, so the run shows the runner works. It is not a finding about a real server.
@@ -227,12 +231,12 @@ Limits of these runs:
 - Ten trials or fewer per configuration, and Sonnet ran only two of the five plans.
 - The runner cuts a tool result at 20,000 characters. It cut one search result in each Sonnet broken-read trial, and 5 in the earlier Haiku run with instructions hidden. In none of those 8 did the full result contain the new issue.
 
-These runs showed five things the runner couldn't do. The first two were added afterwards and are described in the next two sections.
+These runs showed five things the runner couldn't do. Four were added afterwards: trace checks and the answer review, described in the next two sections, and cleanup steps and a cost limit, described at the top of this part. A check still can't look up something a trial created by its id.
 
 - Check the trace. A plan couldn't fail a trial for calls made inside a rate-limit window, or for a retry made without looking first.
 - Score the final answer. It was recorded, but a claim such as "I checked that there is only one comment" wasn't compared with the trace or the server's state.
 - Check something the trial created by its id. Check arguments are fixed in the plan, so the comment count had to come from a list.
-- Clean up between trials.
+- Clean up between trials. On GitHub's server this can only go so far: its issues toolset has no delete tool, so a cleanup step can close a trial's issues but `search_issues` still returns them. A fresh repository per plan is the way round that.
 - Stop at a cost limit. With about 100 issues in the repository one `search_issues` result ran to 40,000 to 50,000 characters, and the 3 Sonnet broken-read trials cost $0.31.
 
 The seven runs made 316 model calls and cost about $0.45.

@@ -4,7 +4,8 @@ import { parseArgs } from 'node:util';
 import { connectUpstream } from '../../packages/mcp/src/index.js';
 import { anthropicTransport } from '../agents/anthropic.js';
 import { findings } from './answers.js';
-import { evaluateMcp, planForRun } from './mcp.js';
+import { noUsage } from '../agents/mcp.js';
+import { estimateCost, evaluateMcp, planForRun } from './mcp.js';
 
 const help = `Faultline MCP evaluation: run a Claude model against a real MCP server with a fault injected
 
@@ -15,6 +16,8 @@ Write {{run}} in the task and checks: each trial replaces it with a fresh id, so
 The model also sees the server's own instructions, as it would in a real client. --no-server-instructions leaves them out.
 --judge MODEL has a second model read each final answer and report what it claims. Faultline then compares the claims with
 the server's state and the trace. This costs one more model call per trial and never changes pass or fail.
+--max-cost DOLLARS stops the run before a model call once the estimated spend has reached it. The default is 1.
+A plan's "setup" and "cleanup" steps run against the server before and after every trial.
 
 Needs ANTHROPIC_API_KEY, an explicit model, and --accept-costs. Tool calls reach the real server, so use a test account.
 Limits: 1-20 trials; --max-turns 1-20 (default 10); --max-output-tokens 512-16000 per call (default 8192).`;
@@ -22,7 +25,7 @@ Limits: 1-20 trials; --max-turns 1-20 (default 10); --max-output-tokens 512-1600
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   plan: { type: 'string' }, model: { type: 'string' }, trials: { type: 'string', default: '1' },
   'max-turns': { type: 'string', default: '10' }, 'max-output-tokens': { type: 'string', default: '8192' },
-  'accept-costs': { type: 'boolean', default: false }, 'no-server-instructions': { type: 'boolean', default: false }, judge: { type: 'string' }, help: { type: 'boolean', default: false },
+  'accept-costs': { type: 'boolean', default: false }, 'no-server-instructions': { type: 'boolean', default: false }, judge: { type: 'string' }, 'max-cost': { type: 'string' }, help: { type: 'boolean', default: false },
 } });
 if (values.help) {
   console.log(help);
@@ -43,6 +46,12 @@ const model = values.model ?? process.env.ANTHROPIC_MODEL;
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!values['accept-costs'] || !apiKey || !model) fail('Live evaluation requires ANTHROPIC_API_KEY, an explicit model, and --accept-costs. No model request was sent.');
 
+// a limit needs a price. Without one the default is dropped with a note, and an explicit limit is refused
+const priced = estimateCost(model!, noUsage()) !== null;
+const maxCostUsd = values['max-cost'] !== undefined ? Number(values['max-cost']) : priced ? 1 : undefined;
+if (maxCostUsd !== undefined && !(Number.isFinite(maxCostUsd) && maxCostUsd > 0)) fail('max-cost must be a number of dollars above 0');
+if (maxCostUsd !== undefined && !priced) fail(`There is no price on file for ${model}, so --max-cost can't be enforced. No model request was sent.`);
+
 let plan: unknown;
 try {
   plan = JSON.parse(await readFile(values.plan!, 'utf8'));
@@ -57,11 +66,12 @@ const startedAt = new Date().toISOString();
 const dollars = (cost: number | null) => cost === null ? 'no price on file' : `$${cost.toFixed(4)}`;
 console.log(`MCP evaluation: ${trials} trial(s) of ${model}, at most ${trials * maxTurns} model calls${values.judge ? ` plus ${trials} by the judge ${values.judge}` : ''}. Tool calls reach the real server, so use a test account.`);
 if (values.judge === model) console.log('Note: the judge is the model under test. A different model is a more independent reader.');
+console.log(maxCostUsd === undefined ? `No price on file for ${model}, so no cost limit applies.` : `Cost limit: $${maxCostUsd}.`);
 try {
   // thinking on a long tool list can take longer than the refund scenarios' 30 seconds
   const transport = anthropicTransport(apiKey!, 120_000);
   const evaluation = await evaluateMcp({ upstream, plan, transport, model: model!, trials, maxTurns, maxOutputTokens,
-    serverInstructions: !values['no-server-instructions'], judge: values.judge ? { model: values.judge, transport } : undefined,
+    serverInstructions: !values['no-server-instructions'], judge: values.judge ? { model: values.judge, transport } : undefined, maxCostUsd,
     onTrial: record => {
       console.log(`[${record.trial}/${trials}] ${record.status.toUpperCase()} (${record.stopReason})  ${record.toolCalls.map(call => call.tool + (call.failed ? '!' : '')).join(' > ') || 'no tool calls'}  ${dollars(record.costUsd)}`);
       for (const check of record.checks.filter(item => !item.passed)) console.log(`      ✗ ${check.label}: ${check.actual}${check.expected ? ` (expected ${check.expected})` : ''}`);

@@ -57,7 +57,17 @@ export interface TraceCheck {
   /** After a call to `tool` fails, one of these tools has to return before `tool` is called again. */
   readBeforeRetry?: string[];
 }
-export interface Plan { faults: FaultSpec[]; checks: StateCheck[]; trace: TraceCheck[]; surface: Surface }
+/** One call to the real server before or after the agent's session. It is outside the fault plan and the trace. */
+export interface Step {
+  tool: string;
+  args?: Record<string, unknown>;
+  /**
+   * Runs the step once for each distinct match of `match` in what this read tool returns.
+   * `{{match}}` in `args` becomes the first capture group, or the whole match if the pattern has none.
+   */
+  forEach?: { tool: string; args?: Record<string, unknown>; match: string };
+}
+export interface Plan { faults: FaultSpec[]; checks: StateCheck[]; trace: TraceCheck[]; setup: Step[]; cleanup: Step[]; surface: Surface }
 export interface Report { status: 'passed' | 'failed' | 'unchecked'; checks: Check[]; events: LabEvent[] }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -74,10 +84,27 @@ function bounds(item: Record<string, unknown>, path: string): { min?: number; ma
   return { min, max };
 }
 
+function steps(list: unknown, name: string): Step[] {
+  if (!Array.isArray(list)) throw new Error(`"${name}" must be an array`);
+  return list.map((item, index): Step => {
+    const path = `${name}[${index}]`;
+    if (!isRecord(item) || typeof item.tool !== 'string' || !item.tool) throw new Error(`${path} needs a "tool" name`);
+    if (item.args !== undefined && !isRecord(item.args)) throw new Error(`${path}.args must be an object`);
+    const step: Step = { tool: item.tool, args: item.args as Record<string, unknown> | undefined };
+    const each = item.forEach;
+    if (each === undefined) return step;
+    if (!isRecord(each) || typeof each.tool !== 'string' || !each.tool) throw new Error(`${path}.forEach needs the "tool" that lists what to act on`);
+    if (each.args !== undefined && !isRecord(each.args)) throw new Error(`${path}.forEach.args must be an object`);
+    if (typeof each.match !== 'string' || !each.match) throw new Error(`${path}.forEach needs "match", a pattern that finds each item`);
+    try { new RegExp(each.match); } catch { throw new Error(`${path}.forEach.match is not a valid regular expression`); }
+    return { ...step, forEach: { tool: each.tool, args: each.args as Record<string, unknown> | undefined, match: each.match } };
+  });
+}
+
 /** Validates a plan read from JSON or the command line. Throws an Error that says what to fix. */
 export function parsePlan(input: unknown): Plan {
   if (!isRecord(input)) throw new Error('The plan must be a JSON object');
-  const { faults: faultList = [], checks: checkList = [], trace: traceList = [], surface = 'tool-error' } = input;
+  const { faults: faultList = [], checks: checkList = [], trace: traceList = [], setup = [], cleanup = [], surface = 'tool-error' } = input;
   if (!Array.isArray(faultList) || !Array.isArray(checkList) || !Array.isArray(traceList)) throw new Error('"faults", "checks" and "trace" must be arrays');
   if (!surfaces.includes(surface as Surface)) throw new Error(`"surface" must be one of: ${surfaces.join(', ')}`);
   const plannedFaults = faultList.map((item, index): FaultSpec => {
@@ -111,12 +138,46 @@ export function parsePlan(input: unknown): Plan {
     if (!traceCounts.includes(item.count as TraceCount)) throw new Error(`${path}.count must be one of: ${traceCounts.join(', ')}`);
     return { ...base, count: item.count as TraceCount, ...bounds(item, path) };
   });
-  return { faults: plannedFaults, checks: plannedChecks, trace: plannedTrace, surface: surface as Surface };
+  return { faults: plannedFaults, checks: plannedChecks, trace: plannedTrace, setup: steps(setup, 'setup'), cleanup: steps(cleanup, 'cleanup'), surface: surface as Surface };
 }
 
 /** Every tool a plan names, so a caller can refuse a misspelled one before the agent starts. */
-export function planTools(plan: Pick<Plan, 'faults' | 'checks' | 'trace'>): string[] {
-  return [...new Set([...plan.faults, ...plan.checks, ...plan.trace].flatMap(item => [item.tool, ...('readBeforeRetry' in item ? item.readBeforeRetry ?? [] : [])]))];
+export function planTools(plan: Pick<Plan, 'faults' | 'checks' | 'trace'> & Partial<Pick<Plan, 'setup' | 'cleanup'>>): string[] {
+  const named = [...plan.faults, ...plan.checks, ...plan.trace].flatMap(item => [item.tool, ...('readBeforeRetry' in item ? item.readBeforeRetry ?? [] : [])]);
+  const stepped = [...plan.setup ?? [], ...plan.cleanup ?? []].flatMap(step => [step.tool, ...(step.forEach ? [step.forEach.tool] : [])]);
+  return [...new Set([...named, ...stepped])];
+}
+
+function fillMatch(value: unknown, match: string): unknown {
+  // a value that is only the placeholder keeps a number a number, for tools that take numeric ids
+  if (value === '{{match}}') return /^\d+$/.test(match) ? Number(match) : match;
+  if (typeof value === 'string') return value.replaceAll('{{match}}', match);
+  if (Array.isArray(value)) return value.map(item => fillMatch(item, match));
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, fillMatch(item, match)]));
+  return value;
+}
+
+/**
+ * Runs setup or cleanup steps against the real server, with no faults and no trace entries.
+ * Returns how many calls it made. Throws on the first call that fails, naming the tool.
+ */
+export async function runSteps(upstream: Pick<Client, 'callTool'>, list: Step[]): Promise<number> {
+  let calls = 0;
+  const call = async (tool: string, args: Record<string, unknown> = {}) => {
+    calls++;
+    let result: CallToolResult;
+    try { result = await upstream.callTool({ name: tool, arguments: args }) as CallToolResult; }
+    catch (error) { throw new Error(`${tool} could not be called: ${error instanceof Error ? error.message : String(error)}`); }
+    if (result.isError) throw new Error(`${tool} failed: ${textOf(result).slice(0, 200)}`);
+    return result;
+  };
+  for (const step of list) {
+    if (!step.forEach) { await call(step.tool, step.args); continue; }
+    const listed = textOf(await call(step.forEach.tool, step.forEach.args));
+    const found = new Set([...listed.matchAll(new RegExp(step.forEach.match, 'g'))].map(match => match[1] ?? match[0]));
+    for (const value of found) await call(step.tool, fillMatch(step.args ?? {}, value) as Record<string, unknown>);
+  }
+  return calls;
 }
 
 /** Reads the command-line form of a fault: `tool:kind` or `tool:kind@1,3` for specific call numbers. */

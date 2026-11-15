@@ -102,6 +102,26 @@ A trace check reads the proxy's own record of the session, so it needs no read t
 
 `readTrace(check, events)` applies a trace check to a list of events, so a new check can be run over the trace in a saved report.
 
+## Setup and cleanup
+
+A plan can list calls to make on the real server before the agent starts and after the checks have run. They don't go through the fault plan and they aren't in the trace.
+
+```json
+{
+  "setup": [
+    { "tool": "create_note", "args": { "title": "Already here" } }
+  ],
+  "cleanup": [
+    { "tool": "delete_note", "args": { "id": "{{match}}" },
+      "forEach": { "tool": "list_notes", "match": "\"id\":\"(note_[0-9]+)\",\"title\":\"Buy milk" } }
+  ]
+}
+```
+
+A step with `forEach` calls the read tool once, finds every distinct match of the pattern in what it returns, and runs the step for each. `{{match}}` in `args` becomes the first capture group, or the whole match if the pattern has none. An argument that is exactly `"{{match}}"` stays a number when the match is all digits, for tools that take numeric ids.
+
+A step that fails stops there. The proxy exits 2 if setup fails and 1 if cleanup fails, and says which tool it was.
+
 ## What stops a false pass
 
 Two things stop a run from passing for the wrong reason. The proxy refuses to start if a fault or check names a tool the server doesn't have. And if a planned fault never fired, because the agent never made that call, the run fails with "Every planned fault fired" even when the checks hold.
@@ -122,7 +142,7 @@ proxy.checkTrace({ label: 'One write', tool: 'create_note', count: 'ran', max: 1
 console.log(formatReport(proxy.report()));
 ```
 
-`proxy.server()` returns an MCP server you can connect to any transport. Pass your own `lab` from `faultline-sdk` to use a simulated clock or to add checks in code.
+`runSteps(upstream, steps)` runs setup or cleanup steps. `proxy.server()` returns an MCP server you can connect to any transport. Pass your own `lab` from `faultline-sdk` to use a simulated clock or to add checks in code.
 
 ## Limits
 
@@ -130,6 +150,7 @@ console.log(formatReport(proxy.report()));
 - It starts stdio servers only. Remote servers over HTTP aren't supported yet.
 - Tools, resources and prompts are passed through. Notifications, sampling and elicitation are not.
 - A state check counts text matches. It can't compare fields or follow pagination, so write the read call to return everything you need on one page.
+- Cleanup can only do what the server's tools can. A server with no delete tool can be tidied, by closing or archiving, but not emptied.
 - A trace check sees calls, not meaning. It can tell that the agent read before it retried, not that it read the right thing or understood the answer.
 - The trace and report hold tool arguments and results. Treat the report file like the data it came from.
 - It has run against the test server in this repository, the official MCP memory server and GitHub's MCP server. No one outside the project has used it.

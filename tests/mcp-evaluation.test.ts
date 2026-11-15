@@ -83,7 +83,7 @@ test('a model that retries a lost reply fails every trial, with the evidence fro
   // what the model was sent: the task, the server's tools, a cached system prompt, and nothing that forces a tool
   const first = observed[0]!;
   assert.equal(first.messages[0]!.content, 'Create a note titled "Buy milk run1".');
-  assert.deepEqual((first.tools as Anthropic.Tool[]).map(tool => tool.name), ['create_note', 'create_note_once', 'list_notes']);
+  assert.deepEqual((first.tools as Anthropic.Tool[]).map(tool => tool.name), ['create_note', 'create_note_once', 'list_notes', 'delete_note']);
   assert.deepEqual(first.system, [{ type: 'text', text: `${defaultSystem}\n\nInstructions from the notes server:\nKeeps short notes.`, cache_control: { type: 'ephemeral' } }]);
   assert.equal(evaluation.serverInstructions, 'Keeps short notes.');
   assert.equal(first.tool_choice, undefined);
@@ -318,4 +318,53 @@ test('a judge that fails is recorded, and changes neither the trial nor the run'
   const plain = await evaluateMcp({ upstream, plan, transport: careful, model: 'claude-haiku-5-5', trials: 1, runId: ids(), ...limits });
   assert.equal(plain.trials[0]!.answer, null);
   assert.equal(plain.summary.answers, null);
+});
+
+// removes what one trial wrote, found by its run id
+const cleanRun = { tool: 'delete_note', args: { id: '{{match}}' }, forEach: { tool: 'list_notes', match: '"id":"(note_\\d+)","title":"[^"]*{{run}}"' } };
+
+test('setup runs before each trial and cleanup after it, so nothing is left for the next one', async () => {
+  const { upstream, notes } = await connectNotes();
+  const tidy = { ...plan, setup: [{ tool: 'create_note', args: { title: 'Seeded for {{run}}' } }], cleanup: [cleanRun],
+    checks: [...plan.checks, { label: 'The seeded note is there', tool: 'list_notes', count: 'Seeded for {{run}}', min: 1, max: 1 }] };
+  const evaluation = await evaluateMcp({ upstream, plan: tidy, transport: blindRetrier(), model: 'claude-sonnet-5-5', trials: 2, runId: ids(), ...limits });
+
+  assert.equal(evaluation.executionError, null);
+  // the setup write didn't use up the fault, the checks saw the trial's notes, and then they were removed
+  assert.deepEqual(evaluation.trials.map(trial => trial.checks.map(check => check.actual)), [['2', '1', ''], ['2', '1', '']]);
+  assert.equal(notes.length, 0);
+  await assert.rejects(evaluateMcp({ upstream, plan: { ...plan, cleanup: [{ tool: 'delete_notes' }] }, transport: careful, model: 'claude-sonnet-5-5', trials: 1, ...limits }), /no tool named delete_notes/);
+});
+
+test('a cleanup that fails ends the run, and a failed setup is never scored', async () => {
+  const { upstream } = await connectNotes();
+  const broken = { ...plan, cleanup: [{ tool: 'delete_note', args: { id: 'no-such-note' } }] };
+  const evaluation = await evaluateMcp({ upstream, plan: broken, transport: careful, model: 'claude-sonnet-5-5', trials: 3, runId: ids(), ...limits });
+  // the first trial itself stands. The run stops because the next one would count its leftovers.
+  assert.equal(evaluation.completedTrials, 1);
+  assert.equal(evaluation.trials[0]!.status, 'passed');
+  assert.match(evaluation.executionError ?? '', /^Cleanup failed after trial 1: delete_note failed/);
+  assert.equal(evaluation.interruptedTrial, null);
+
+  const unready = await evaluateMcp({ upstream, plan: { ...plan, setup: [{ tool: 'delete_note', args: { id: 'no-such-note' } }] }, transport: careful, model: 'claude-sonnet-5-5', trials: 2, runId: ids(), ...limits });
+  assert.equal(unready.completedTrials, 0);
+  assert.match(unready.executionError ?? '', /^Setup failed: delete_note failed/);
+  assert.equal(unready.interruptedTrial?.usage.modelCalls, 0);
+});
+
+test('a cost limit stops the run before the next model call, and keeps what finished', async () => {
+  const { upstream } = await connectNotes();
+  // each scripted reply costs $0.0015 at Sonnet prices, and this model makes three calls a trial
+  assert.equal(estimateCost('claude-sonnet-5-5', { modelCalls: 1, inputTokens: 100, cacheReadTokens: 1000, cacheWriteTokens: 400, outputTokens: 20 }), 0.0015);
+  const evaluation = await evaluateMcp({ upstream, plan, transport: blindRetrier(), model: 'claude-sonnet-5-5', trials: 5, runId: ids(), ...limits, maxCostUsd: 0.005 });
+
+  assert.equal(evaluation.maxCostUsd, 0.005);
+  assert.equal(evaluation.completedTrials, 1);
+  // trial 2 made one call, taking the spend to $0.006, and was stopped before its second
+  assert.deepEqual([evaluation.interruptedTrial?.trial, evaluation.interruptedTrial?.usage.modelCalls], [2, 1]);
+  assert.match(evaluation.executionError ?? '', /^Stopped at the cost limit of \$0\.005, with about \$0\.0060 spent$/);
+  assert.equal(evaluation.summary.usage.modelCalls, 4);
+
+  // a limit that can't be enforced is refused before any call
+  await assert.rejects(evaluateMcp({ upstream, plan, transport: careful, model: 'some-unpriced-model', trials: 1, ...limits, maxCostUsd: 1 }), /no price on file for some-unpriced-model/);
 });

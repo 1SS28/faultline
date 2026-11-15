@@ -7,6 +7,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 export function notesServer() {
   const notes: Array<{ id: string; title: string }> = [];
   const byKey = new Map<string, string>();
+  // a counter, so an id isn't reused after a delete
+  let created = 0;
   const server = new Server({ name: 'notes', version: '1.0.0' }, { capabilities: { tools: {} }, instructions: 'Keeps short notes.' });
   const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value) }] });
   const title = { type: 'string', description: 'What the note says' };
@@ -16,16 +18,23 @@ export function notesServer() {
     { name: 'create_note_once', description: 'Create a note. Calls with the same key create it once.',
       inputSchema: { type: 'object' as const, properties: { title, key: { type: 'string' } }, required: ['title', 'key'] } },
     { name: 'list_notes', description: 'List every note.', inputSchema: { type: 'object' as const, properties: {} }, annotations: { readOnlyHint: true } },
+    { name: 'delete_note', description: 'Delete a note by its id.', inputSchema: { type: 'object' as const, properties: { id: { type: 'string' } }, required: ['id'] } },
   ] }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     const { name, arguments: args = {} } = request.params;
     if (name === 'list_notes') return text(notes);
+    if (name === 'delete_note') {
+      const at = notes.findIndex(note => note.id === args.id);
+      if (at === -1) return { ...text(`No note with id ${String(args.id)}`), isError: true };
+      notes.splice(at, 1);
+      return text('Deleted');
+    }
     if (name !== 'create_note' && name !== 'create_note_once') throw new Error(`Unknown tool: ${name}`);
     if (typeof args.title !== 'string' || !args.title) return { ...text('A note needs a title'), isError: true };
     const key = name === 'create_note_once' ? String(args.key ?? '') : '';
     const earlier = notes.find(note => key && note.id === byKey.get(key));
     if (earlier) return text(earlier);
-    const note = { id: `note_${notes.length + 1}`, title: args.title };
+    const note = { id: `note_${++created}`, title: args.title };
     notes.push(note);
     if (key) byKey.set(key, note.id);
     return text(note);

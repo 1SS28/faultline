@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { createFaultProxy, parsePlan, planTools, type Plan, type Report } from '../../packages/mcp/src/index.js';
+import { createFaultProxy, parsePlan, planTools, runSteps, type Plan, type Report } from '../../packages/mcp/src/index.js';
 import type { ClaudeTransport } from '../agents/anthropic.js';
 import { defaultSystem, noUsage, runModelThroughProxy, type ModelRun, type Usage } from '../agents/mcp.js';
 import { readAfterFault, reviewAnswer, type AnswerReview, type Finding } from './answers.js';
@@ -57,6 +57,8 @@ export interface McpEvaluation {
   /** The server's own guidance as the model saw it, or null if it has none or it was left out. */
   serverInstructions: string | null;
   plannedTrials: number;
+  /** The cost limit the run was given, or null. */
+  maxCostUsd: number | null;
   completedTrials: number;
   executionError: string | null;
   interruptedTrial: { trial: number; runId: string; usage: Usage } | null;
@@ -81,6 +83,8 @@ export async function evaluateMcp(options: {
   maxTurns: number; maxOutputTokens: number; maxResultChars?: number; serverInstructions?: boolean;
   /** A second model that reads each final answer. It sees the task and the answer, never the trace or the server's state. */
   judge?: { model: string; transport: ClaudeTransport };
+  /** Stops before a model call once the estimated spend, judge included, has reached this many dollars. */
+  maxCostUsd?: number;
   onTrial?: (record: TrialRecord) => void; runId?: () => string;
 }): Promise<McpEvaluation> {
   const { upstream, model, trials } = options;
@@ -101,6 +105,8 @@ export async function evaluateMcp(options: {
   // a real client shows the model the server's own guidance, so the test does too
   const guidance = options.serverInstructions === false ? null : upstream.getInstructions()?.trim() || null;
   const withGuidance = (system: string) => guidance ? `${system}\n\nInstructions from the ${server?.name ?? 'MCP'} server:\n${guidance}` : system;
+  // an estimate needs a price, and a limit that can't be enforced would be worse than none
+  if (options.maxCostUsd !== undefined && estimateCost(model, noUsage()) === null) throw new Error(`There is no price on file for ${model}, so a cost limit can't be enforced`);
   const hash = createHash('sha256').update(withGuidance(template.system)).update(template.task).update(JSON.stringify(tools)).digest('hex');
   const records: TrialRecord[] = [];
   let executionError: string | null = null;
@@ -111,8 +117,15 @@ export async function evaluateMcp(options: {
     const { task, system, plan } = planForRun(options.plan, runId);
     const proxy = createFaultProxy({ upstream, faults: plan.faults, surface: plan.surface });
     const usage = noUsage();
+    const spent = () => records.reduce((sum, record) => sum + (record.costUsd ?? 0), 0) + (estimateCost(model, usage) ?? 0)
+      + (options.judge ? estimateCost(options.judge.model, judgeUsage) ?? 0 : 0);
+    const withinBudget = () => {
+      if (options.maxCostUsd !== undefined && spent() >= options.maxCostUsd) throw new Error(`Stopped at the cost limit of $${options.maxCostUsd}, with about $${spent().toFixed(4)} spent`);
+    };
     try {
-      const run = await runModelThroughProxy({ proxy, transport: options.transport, model, system: withGuidance(system), task, usage,
+      try { await runSteps(upstream, plan.setup); }
+      catch (error) { throw new Error(`Setup failed: ${error instanceof Error ? error.message : String(error)}`); }
+      const run = await runModelThroughProxy({ proxy, transport: options.transport, model, system: withGuidance(system), task, usage, beforeCall: withinBudget,
         maxTurns: options.maxTurns, maxOutputTokens: options.maxOutputTokens, maxResultChars: options.maxResultChars });
       for (const check of plan.checks) await proxy.check(check);
       for (const check of plan.trace) proxy.checkTrace(check);
@@ -127,8 +140,12 @@ export async function evaluateMcp(options: {
     } catch (error) {
       executionError = error instanceof Error ? error.message : 'Evaluation interrupted';
       interruptedTrial = { trial, runId, usage };
-      break;
     }
+    // also after a trial that was cut short, so a stopped run doesn't leave its writes behind
+    try { await runSteps(upstream, plan.cleanup); }
+    catch (error) { executionError ??= `Cleanup failed after trial ${trial}: ${error instanceof Error ? error.message : String(error)}`; }
+    // leftovers would be counted by the next trial, so a failed cleanup ends the run too
+    if (executionError) break;
   }
 
   const passed = records.filter(record => record.status === 'passed').length;
@@ -145,7 +162,7 @@ export async function evaluateMcp(options: {
   } : null;
   return {
     model, task: template.task, agentVersion: `anthropic/${model}@${hash.slice(0, 8)}`, server: server ? `${server.name} ${server.version}` : null, serverInstructions: guidance,
-    plannedTrials: trials, completedTrials: records.length, executionError, interruptedTrial,
+    plannedTrials: trials, maxCostUsd: options.maxCostUsd ?? null, completedTrials: records.length, executionError, interruptedTrial,
     summary: {
       trials: records.length, passed, passRate: records.length ? Math.round(passed / records.length * 10000) / 100 : null,
       confidence95: records.length ? wilson95(passed, records.length) : null,

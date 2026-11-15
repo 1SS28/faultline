@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { connectUpstream, createFaultProxy, faultKinds, formatReport, parseFaultFlag, parsePlan, planTools, type Plan } from './index.js';
+import { connectUpstream, createFaultProxy, faultKinds, formatReport, parseFaultFlag, parsePlan, planTools, runSteps, type Plan } from './index.js';
 
 const usage = `faultline-mcp-proxy: break an MCP server's tool calls on purpose, then check what it really did
 
@@ -11,7 +11,7 @@ const usage = `faultline-mcp-proxy: break an MCP server's tool calls on purpose,
 
 Options:
   --fault <tool>:<kind>[@calls]  Break a tool. Repeatable. Calls count from 1, default 1 (example: create_issue:timeout-after-commit@1,2)
-  --config <file.json>           A plan with "faults", "checks", "trace" and "surface"
+  --config <file.json>           A plan with "faults", "checks", "trace", "setup", "cleanup" and "surface"
   --report <file.json>           Write the trace and check results here when the session ends
   --surface <how>                tool-error (default) or protocol-error
   --help
@@ -64,6 +64,13 @@ if (unknown.length) {
   await upstream.close().catch(() => undefined);
   process.exit(2);
 }
+try {
+  await runSteps(upstream, plan.setup);
+} catch (error) {
+  say(`faultline-mcp-proxy: setup failed: ${error instanceof Error ? error.message : String(error)}`);
+  await upstream.close().catch(() => undefined);
+  process.exit(2);
+}
 if (plan.faults.length) say(`faultline-mcp-proxy: breaking ${plan.faults.map(fault => `${fault.tool} (${fault.kind})`).join(', ')}. Tool calls still reach the real server, so use a test account.`);
 
 let finishing: Promise<never> | undefined;
@@ -79,8 +86,16 @@ const finish = () => finishing ??= (async () => {
     await writeFile(reportPath, JSON.stringify({ server: [command, ...args].join(' '), faults: plan.faults, ...report }, null, 2));
     say(`Saved report: ${reportPath}`);
   }
+  let cleaned = true;
+  try {
+    const calls = await runSteps(upstream, plan.cleanup);
+    if (plan.cleanup.length) say(`Cleanup made ${calls} call${calls === 1 ? '' : 's'}`);
+  } catch (error) {
+    cleaned = false;
+    say(`Cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   await upstream.close().catch(() => undefined);
-  process.exit(report.status === 'failed' ? 1 : 0);
+  process.exit(report.status === 'failed' || !cleaned ? 1 : 0);
 })();
 
 upstream.onclose = () => {
