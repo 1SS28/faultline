@@ -41,17 +41,44 @@ export interface StateCheck {
   min?: number;
   max?: number;
 }
-export interface Plan { faults: FaultSpec[]; checks: StateCheck[]; surface: Surface }
+export const traceCounts = ['calls', 'ran', 'while-limited'] as const;
+export type TraceCount = typeof traceCounts[number];
+
+/** A check on what the agent did, read from the proxy's own trace after the agent is done. Give `count` or `readBeforeRetry`. */
+export interface TraceCheck {
+  label: string;
+  tool: string;
+  /** Only calls whose arguments include these values are looked at. */
+  where?: Record<string, unknown>;
+  /** What to count: every call, calls that reached the server, or calls made while an injected rate limit was still in force. */
+  count?: TraceCount;
+  min?: number;
+  max?: number;
+  /** After a call to `tool` fails, one of these tools has to return before `tool` is called again. */
+  readBeforeRetry?: string[];
+}
+export interface Plan { faults: FaultSpec[]; checks: StateCheck[]; trace: TraceCheck[]; surface: Surface }
 export interface Report { status: 'passed' | 'failed' | 'unchecked'; checks: Check[]; events: LabEvent[] }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const positiveIntegers = (value: unknown): value is number[] => Array.isArray(value) && value.length > 0 && value.every(item => Number.isInteger(item) && item > 0);
+function bounds(item: Record<string, unknown>, path: string): { min?: number; max?: number } {
+  const bound = (name: 'min' | 'max') => {
+    const value = item[name];
+    if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error(`${path}.${name} must be a whole number, 0 or more`);
+    return value as number | undefined;
+  };
+  const min = bound('min'), max = bound('max');
+  // with no bound, every count would pass
+  if (min === undefined && max === undefined) throw new Error(`${path} needs "min", "max" or both`);
+  return { min, max };
+}
 
 /** Validates a plan read from JSON or the command line. Throws an Error that says what to fix. */
 export function parsePlan(input: unknown): Plan {
   if (!isRecord(input)) throw new Error('The plan must be a JSON object');
-  const { faults: faultList = [], checks: checkList = [], surface = 'tool-error' } = input;
-  if (!Array.isArray(faultList) || !Array.isArray(checkList)) throw new Error('"faults" and "checks" must be arrays');
+  const { faults: faultList = [], checks: checkList = [], trace: traceList = [], surface = 'tool-error' } = input;
+  if (!Array.isArray(faultList) || !Array.isArray(checkList) || !Array.isArray(traceList)) throw new Error('"faults", "checks" and "trace" must be arrays');
   if (!surfaces.includes(surface as Surface)) throw new Error(`"surface" must be one of: ${surfaces.join(', ')}`);
   const plannedFaults = faultList.map((item, index): FaultSpec => {
     if (!isRecord(item) || typeof item.tool !== 'string' || !item.tool) throw new Error(`faults[${index}] needs a "tool" name`);
@@ -67,17 +94,29 @@ export function parsePlan(input: unknown): Plan {
     if (item.args !== undefined && !isRecord(item.args)) throw new Error(`checks[${index}].args must be an object`);
     if (typeof item.count !== 'string' || !item.count) throw new Error(`checks[${index}] needs "count", the text or pattern to count`);
     try { new RegExp(item.count); } catch { throw new Error(`checks[${index}].count is not a valid regular expression`); }
-    const bound = (name: 'min' | 'max') => {
-      const value = item[name];
-      if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error(`checks[${index}].${name} must be a whole number, 0 or more`);
-      return value as number | undefined;
-    };
-    const min = bound('min'), max = bound('max');
-    // with no bound, every count would pass
-    if (min === undefined && max === undefined) throw new Error(`checks[${index}] needs "min", "max" or both`);
-    return { label: item.label, tool: item.tool, args: item.args as Record<string, unknown> | undefined, count: item.count, min, max };
+    return { label: item.label, tool: item.tool, args: item.args as Record<string, unknown> | undefined, count: item.count, ...bounds(item, `checks[${index}]`) };
   });
-  return { faults: plannedFaults, checks: plannedChecks, surface: surface as Surface };
+  const plannedTrace = traceList.map((item, index): TraceCheck => {
+    const path = `trace[${index}]`;
+    if (!isRecord(item) || typeof item.label !== 'string' || !item.label) throw new Error(`${path} needs a "label"`);
+    if (typeof item.tool !== 'string' || !item.tool) throw new Error(`${path} needs the "tool" whose calls it looks at`);
+    if (item.where !== undefined && !isRecord(item.where)) throw new Error(`${path}.where must be an object`);
+    const base = { label: item.label, tool: item.tool, where: item.where as Record<string, unknown> | undefined };
+    if ((item.count === undefined) === (item.readBeforeRetry === undefined)) throw new Error(`${path} needs "count" or "readBeforeRetry", and not both`);
+    if (item.readBeforeRetry !== undefined) {
+      const tools = item.readBeforeRetry;
+      if (!Array.isArray(tools) || !tools.length || !tools.every(name => typeof name === 'string' && name)) throw new Error(`${path}.readBeforeRetry must list tool names`);
+      return { ...base, readBeforeRetry: tools as string[] };
+    }
+    if (!traceCounts.includes(item.count as TraceCount)) throw new Error(`${path}.count must be one of: ${traceCounts.join(', ')}`);
+    return { ...base, count: item.count as TraceCount, ...bounds(item, path) };
+  });
+  return { faults: plannedFaults, checks: plannedChecks, trace: plannedTrace, surface: surface as Surface };
+}
+
+/** Every tool a plan names, so a caller can refuse a misspelled one before the agent starts. */
+export function planTools(plan: Pick<Plan, 'faults' | 'checks' | 'trace'>): string[] {
+  return [...new Set([...plan.faults, ...plan.checks, ...plan.trace].flatMap(item => [item.tool, ...('readBeforeRetry' in item ? item.readBeforeRetry ?? [] : [])]))];
 }
 
 /** Reads the command-line form of a fault: `tool:kind` or `tool:kind@1,3` for specific call numbers. */
@@ -114,6 +153,47 @@ function textOf(result: CallToolResult): string {
 
 const describeRange = (min: number, max: number) =>
   min === max ? String(min) : max === Infinity ? `at least ${min}` : min === 0 ? `at most ${max}` : `${min} to ${max}`;
+
+/**
+ * Applies one trace check to a list of events. It needs nothing but the events, so it also works on
+ * the trace saved in an earlier report.
+ */
+export function readTrace(spec: TraceCheck, events: LabEvent[]): { passed: boolean; expected: string; actual: string } {
+  const key = (event: LabEvent) => `${event.data.tool}#${event.data.call}`;
+  const keys = (list: LabEvent[]) => new Set(list.map(key));
+  const requests = events.filter(event => event.kind === 'tool.request');
+  const matches = (args: unknown) => Object.entries(spec.where ?? {}).every(([name, value]) => isRecord(args) && JSON.stringify(args[name]) === JSON.stringify(value));
+  const own = keys(requests.filter(event => event.data.tool === spec.tool && matches((event.data.args as unknown[])[0])));
+  const faulted = keys(events.filter(event => event.kind === 'fault.injected'));
+  // a call turned away by a rate limit is recorded as a response with no result
+  const rejected = events.filter(event => event.kind === 'tool.response' && !('response' in event.data));
+  const returned = keys(events.filter(event => event.kind === 'tool.response' && 'response' in event.data && !(event.data.response as CallToolResult).isError));
+
+  if (!spec.readBeforeRetry) {
+    const found = spec.count === 'calls' ? own.size
+      : spec.count === 'ran' ? events.filter(event => event.kind === 'tool.commit' && own.has(key(event))).length
+      // the call that set the limit off doesn't count: the agent hadn't been told yet
+      : rejected.filter(event => own.has(key(event)) && !faulted.has(key(event))).length;
+    const min = spec.min ?? 0, max = spec.max ?? Infinity;
+    return { passed: found >= min && found <= max, expected: describeRange(min, max), actual: String(found) };
+  }
+
+  let failed = false, unread = false, repeats = 0, blind = 0;
+  for (const event of requests) {
+    // a read only counts if it came back: one that failed or was faulted told the agent nothing
+    if (spec.readBeforeRetry.includes(event.data.tool as string) && returned.has(key(event)) && !faulted.has(key(event))) unread = false;
+    if (!own.has(key(event))) continue;
+    if (failed) repeats++;
+    if (failed && unread) blind++;
+    failed = unread = faulted.has(key(event)) || !returned.has(key(event));
+  }
+  return {
+    passed: blind === 0, expected: `${spec.readBeforeRetry.join(' or ')} first`,
+    actual: !repeats ? 'no repeat after a failure'
+      : blind ? `${blind} of ${repeats} repeat${repeats === 1 ? '' : 's'} after a failure came with no read first`
+      : `${repeats} repeat${repeats === 1 ? '' : 's'} after a failure, each after a read`,
+  };
+}
 
 /** Starts an MCP server as a child process and connects to it. The child gets this process's environment. */
 export async function connectUpstream(command: string, args: string[] = [], options: { env?: Record<string, string>; cwd?: string } = {}): Promise<Client> {
@@ -187,6 +267,13 @@ export function createFaultProxy(options: { upstream: Client; faults?: FaultSpec
     }
   }
 
+  /** Checks what the agent did, from the trace so far. Call it after the agent is done. */
+  function checkTrace(spec: TraceCheck): void {
+    checked = true;
+    const { passed, ...details } = readTrace(spec, lab.result().events);
+    lab.check(spec.label, passed, details);
+  }
+
   /** Planned faults the agent never ran into, such as a write it never made. */
   function unusedFaults(): string[] {
     const fired = new Set(lab.result().events.filter(event => event.kind === 'fault.injected').map(event => `${event.data.tool}#${event.data.call}`));
@@ -226,14 +313,14 @@ export function createFaultProxy(options: { upstream: Client; faults?: FaultSpec
     return proxy;
   }
 
-  return { lab, upstream, callTool, listTools, check, report, unusedFaults, server };
+  return { lab, upstream, callTool, listTools, check, checkTrace, report, unusedFaults, server };
 }
 export type FaultProxy = ReturnType<typeof createFaultProxy>;
 
 /** Formats a report like `npm run faultline -- run`, for terminals and CI logs. */
 export function formatReport(report: Report): string {
   return [
-    report.status === 'unchecked' ? 'UNCHECKED (no state checks were configured)' : report.status.toUpperCase(),
+    report.status === 'unchecked' ? 'UNCHECKED (no checks were configured)' : report.status.toUpperCase(),
     ...report.events.map(event => `  ${String(event.sequence).padStart(2, '0')}  +${event.timeMs}ms  ${event.message}`),
     ...report.checks.map(item => `  ${item.passed ? '✓' : '✗'} ${item.label}${item.actual ? `: ${item.actual}` : ''}${!item.passed && item.expected ? ` (expected ${item.expected})` : ''}`),
   ].join('\n');

@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLab } from '../packages/sdk/src/index.js';
-import { createFaultProxy, formatReport, parseFaultFlag, parsePlan, type FaultSpec, type Surface } from '../packages/mcp/src/index.js';
+import { createFaultProxy, formatReport, parseFaultFlag, parsePlan, planTools, type FaultSpec, type Surface } from '../packages/mcp/src/index.js';
 import { notesServer } from './fixtures/notes-server.js';
 
 // agent <-> proxy <-> notes server, all in this process. `notes` is the server's own state.
@@ -164,6 +164,75 @@ test('plans are validated with messages that say what to fix', () => {
   assert.throws(() => parsePlan({ checks: [{ label: 'x', tool: 'list_notes', count: 'milk' }] }), /needs "min", "max" or both/);
   assert.throws(() => parsePlan({ checks: [{ label: 'x', tool: 'list_notes', count: '(', max: 1 }] }), /not a valid regular expression/);
   assert.throws(() => parsePlan({ surface: 'loud' }), /"surface" must be one of/);
+  assert.throws(() => parsePlan({ trace: [{ label: 'x', tool: 'create_note' }] }), /needs "count" or "readBeforeRetry", and not both/);
+  assert.throws(() => parsePlan({ trace: [{ label: 'x', tool: 'create_note', count: 'guesses', max: 1 }] }), /count must be one of: calls, ran, while-limited/);
+  assert.throws(() => parsePlan({ trace: [{ label: 'x', tool: 'create_note', count: 'ran' }] }), /trace\[0\] needs "min", "max" or both/);
+  assert.throws(() => parsePlan({ trace: [{ label: 'x', tool: 'create_note', readBeforeRetry: [] }] }), /must list tool names/);
+  const withTrace = parsePlan({ faults: [{ tool: 'create_note', kind: 'rate-limit' }], trace: [{ label: 'x', tool: 'create_note_once', readBeforeRetry: ['list_notes'] }] });
+  assert.deepEqual(planTools(withTrace), ['create_note', 'create_note_once', 'list_notes']);
+});
+
+const looked = { label: 'Looked before writing again', tool: 'create_note', readBeforeRetry: ['list_notes'] };
+
+test('a trace check counts how often a write reached the server, with no read tool involved', async () => {
+  const { call, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
+  await call('create_note', { title: 'Buy milk' });
+  await call('create_note', { title: 'Buy milk' });
+  await call('create_note', { title: 'Call the bank' });
+
+  proxy.checkTrace({ label: 'Buy milk was written once', tool: 'create_note', where: { title: 'Buy milk' }, count: 'ran', max: 1 });
+  proxy.checkTrace({ label: 'Three calls in all', tool: 'create_note', count: 'calls', min: 3, max: 3 });
+  const report = proxy.report();
+  // a run with only trace checks is still a checked run
+  assert.equal(report.status, 'failed');
+  assert.deepEqual(report.checks.map(item => [item.passed, item.actual]), [[false, '2'], [true, '3'], [true, '']]);
+  assert.match(formatReport(report), /✗ Buy milk was written once: 2 \(expected at most 1\)/);
+});
+
+test('a trace check counts the calls made while a rate limit was still in force', async () => {
+  const { call, proxy } = await setUp([{ tool: 'create_note', kind: 'rate-limit', retryAfterMs: 500 }]);
+  await call('create_note', { title: 'Buy milk' }); // sets the limit off
+  await call('create_note', { title: 'Buy milk' }); // too early
+  await call('create_note', { title: 'Buy milk' }); // too early
+  await proxy.lab.wait(500);
+  await call('create_note', { title: 'Buy milk' });
+
+  proxy.checkTrace({ label: 'No call inside the window', tool: 'create_note', count: 'while-limited', max: 0 });
+  proxy.checkTrace({ label: 'The note was written once', tool: 'create_note', count: 'ran', min: 1, max: 1 });
+  assert.deepEqual(proxy.report().checks.slice(0, 2).map(item => [item.passed, item.actual]), [[false, '2'], [true, '1']]);
+});
+
+test('a retry with no read first fails the trace check, even when it happened to do no harm', async () => {
+  // the write was lost, so the blind retry ends with one note
+  const blind = await setUp([{ tool: 'create_note', kind: 'timeout-before-commit' }]);
+  await blind.call('create_note', { title: 'Buy milk' });
+  await blind.call('create_note', { title: 'Buy milk' });
+  await blind.proxy.check(oneNote);
+  blind.proxy.checkTrace(looked);
+  assert.deepEqual(blind.proxy.report().checks.slice(0, 2).map(item => item.passed), [true, false]);
+  assert.match(formatReport(blind.proxy.report()), /✗ Looked before writing again: 1 of 1 repeat after a failure came with no read first \(expected list_notes first\)/);
+
+  const careful = await setUp([{ tool: 'create_note', kind: 'timeout-before-commit' }]);
+  await careful.call('create_note', { title: 'Buy milk' });
+  await careful.call('list_notes');
+  await careful.call('create_note', { title: 'Buy milk' });
+  careful.proxy.checkTrace(looked);
+  assert.equal(careful.proxy.report().checks[0]?.passed, true);
+
+  // no repeat at all passes
+  const once = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }]);
+  await once.call('create_note', { title: 'Buy milk' });
+  once.proxy.checkTrace(looked);
+  assert.deepEqual([once.proxy.report().checks[0]?.passed, once.proxy.report().checks[0]?.actual], [true, 'no repeat after a failure']);
+});
+
+test('a read that came back broken does not count as a read', async () => {
+  const { call, proxy } = await setUp([{ tool: 'create_note', kind: 'timeout-after-commit' }, { tool: 'list_notes', kind: 'malformed-response' }]);
+  await call('create_note', { title: 'Buy milk' });
+  await call('list_notes'); // empty, by the fault
+  await call('create_note', { title: 'Buy milk' });
+  proxy.checkTrace(looked);
+  assert.equal(proxy.report().checks[0]?.passed, false);
 });
 
 // the same story through the real command line: two child processes talking stdio
@@ -174,7 +243,7 @@ const realServer = [node, '--import', 'tsx', 'tests/fixtures/notes-server.ts'];
 test('the command-line proxy injects the fault, checks the server and writes a report', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'faultline-mcp-'));
   const config = join(folder, 'plan.json'), reportPath = join(folder, 'out', 'report.json');
-  await writeFile(config, JSON.stringify({ faults: [{ tool: 'create_note', kind: 'timeout-after-commit' }], checks: [oneNote] }));
+  await writeFile(config, JSON.stringify({ faults: [{ tool: 'create_note', kind: 'timeout-after-commit' }], checks: [oneNote], trace: [looked] }));
 
   const transport = new StdioClientTransport({ command: node, args: [...cli, '--config', config, '--report', reportPath, '--', ...realServer], stderr: 'pipe' });
   const exited = new Promise<number | null>(resolve => { transport.onclose = () => resolve(null); });
@@ -190,6 +259,7 @@ test('the command-line proxy injects the fault, checks the server and writes a r
   const report = JSON.parse(await readFile(reportPath, 'utf8'));
   assert.equal(report.status, 'failed');
   assert.equal(report.checks[0].actual, '2');
+  assert.deepEqual([report.checks[1].label, report.checks[1].passed], ['Looked before writing again', false]);
   assert.ok(report.events.some((event: { kind: string }) => event.kind === 'fault.injected'));
 });
 

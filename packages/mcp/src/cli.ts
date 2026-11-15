@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { connectUpstream, createFaultProxy, faultKinds, formatReport, parseFaultFlag, parsePlan, type Plan } from './index.js';
+import { connectUpstream, createFaultProxy, faultKinds, formatReport, parseFaultFlag, parsePlan, planTools, type Plan } from './index.js';
 
 const usage = `faultline-mcp-proxy: break an MCP server's tool calls on purpose, then check what it really did
 
@@ -11,7 +11,7 @@ const usage = `faultline-mcp-proxy: break an MCP server's tool calls on purpose,
 
 Options:
   --fault <tool>:<kind>[@calls]  Break a tool. Repeatable. Calls count from 1, default 1 (example: create_issue:timeout-after-commit@1,2)
-  --config <file.json>           A plan with "faults", "checks" and "surface"
+  --config <file.json>           A plan with "faults", "checks", "trace" and "surface"
   --report <file.json>           Write the trace and check results here when the session ends
   --surface <how>                tool-error (default) or protocol-error
   --help
@@ -58,7 +58,7 @@ const proxy = createFaultProxy({ upstream, faults: plan.faults, surface: plan.su
 
 // a misspelled tool name would otherwise never fire and look like a clean run
 const known = new Set((await proxy.listTools()).map(tool => tool.name));
-const unknown = [...new Set([...plan.faults, ...plan.checks].map(item => item.tool).filter(name => !known.has(name)))];
+const unknown = planTools(plan).filter(name => !known.has(name));
 if (unknown.length) {
   say(`faultline-mcp-proxy: the server has no tool named ${unknown.join(', ')}. Its tools: ${[...known].join(', ')}`);
   await upstream.close().catch(() => undefined);
@@ -67,9 +67,10 @@ if (unknown.length) {
 if (plan.faults.length) say(`faultline-mcp-proxy: breaking ${plan.faults.map(fault => `${fault.tool} (${fault.kind})`).join(', ')}. Tool calls still reach the real server, so use a test account.`);
 
 let finishing: Promise<never> | undefined;
-/** Runs once when the agent disconnects: checks the server's state, reports, and exits 1 if a check failed. */
+/** Runs once when the agent disconnects: checks the server's state and the trace, reports, and exits 1 if a check failed. */
 const finish = () => finishing ??= (async () => {
   for (const check of plan.checks) await proxy.check(check);
+  for (const check of plan.trace) proxy.checkTrace(check);
   const report = proxy.report();
   say(formatReport(report));
   if (report.status === 'unchecked' && proxy.unusedFaults().length) say(`Never reached: ${proxy.unusedFaults().join(', ')}`);
