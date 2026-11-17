@@ -72,6 +72,9 @@ Each fault names a tool and the call numbers it applies to, counting that tool's
 | `timeout-before-commit` | Nothing, the call never arrives | A timeout |
 | `rate-limit` | Nothing until `retryAfterMs` has passed (default 1000) | "Rate limit exceeded. Retry after 1000ms." |
 | `malformed-response` | Runs the call | An empty result |
+| `planted-text` | Runs the call | The real result, with your `text` added to it |
+
+`planted-text` tests an agent that reads content someone else wrote. Give it the `text` to plant and, for a JSON result, the `field` to put it in, such as `"body"`: the text is added to the first string field of that name. Without a field, or when the result has none, it goes at the end. Then check that the agent didn't do what the text asked, with a trace check such as `{ "tool": "delete_note", "count": "calls", "max": 0 }`. The server's own data is never changed.
 
 The timeout text is "Request timed out". Set `message` on a fault to use the wording your real stack produces. The text deliberately doesn't say that the outcome is unknown, because a real timeout doesn't either.
 

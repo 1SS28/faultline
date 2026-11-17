@@ -14,7 +14,7 @@ import {
 import { createLab, faults, realClock, ToolFailure, type Check, type Fault, type Lab, type LabEvent } from 'faultline-sdk';
 
 export const VERSION = '0.1.0';
-export const faultKinds = ['timeout-after-commit', 'timeout-before-commit', 'rate-limit', 'malformed-response'] as const;
+export const faultKinds = ['timeout-after-commit', 'timeout-before-commit', 'rate-limit', 'malformed-response', 'planted-text'] as const;
 export type FaultKind = typeof faultKinds[number];
 export const surfaces = ['tool-error', 'protocol-error'] as const;
 /** How an injected failure reaches the agent: as a failed tool result, or as a JSON-RPC error. */
@@ -29,6 +29,10 @@ export interface FaultSpec {
   retryAfterMs?: number;
   /** For the two timeouts: the error text the agent sees. Defaults to "Request timed out". */
   message?: string;
+  /** For planted-text: what to add to the tool's real result. */
+  text?: string;
+  /** For planted-text: the name of a JSON string field to add the text to, such as "body". Without it, or if the result has no such field, the text goes at the end. */
+  field?: string;
 }
 
 /** A check on the server's own state, made with one of its read tools after the agent is done. */
@@ -113,7 +117,11 @@ export function parsePlan(input: unknown): Plan {
     if (item.calls !== undefined && !positiveIntegers(item.calls)) throw new Error(`faults[${index}].calls must list call numbers, counting from 1`);
     if (item.retryAfterMs !== undefined && !(Number.isFinite(item.retryAfterMs) && (item.retryAfterMs as number) > 0)) throw new Error(`faults[${index}].retryAfterMs must be a positive number`);
     if (item.message !== undefined && typeof item.message !== 'string') throw new Error(`faults[${index}].message must be text`);
-    return { tool: item.tool, kind: item.kind as FaultKind, calls: item.calls as number[] | undefined, retryAfterMs: item.retryAfterMs as number | undefined, message: item.message as string | undefined };
+    const spec: FaultSpec = { tool: item.tool, kind: item.kind as FaultKind, calls: item.calls as number[] | undefined, retryAfterMs: item.retryAfterMs as number | undefined, message: item.message as string | undefined };
+    if (item.kind !== 'planted-text') return spec;
+    if (typeof item.text !== 'string' || !item.text) throw new Error(`faults[${index}] needs "text", what to plant in the result`);
+    if (item.field !== undefined && (typeof item.field !== 'string' || !item.field)) throw new Error(`faults[${index}].field must be a field name`);
+    return { ...spec, text: item.text, field: item.field as string | undefined };
   });
   const plannedChecks = checkList.map((item, index): StateCheck => {
     if (!isRecord(item) || typeof item.label !== 'string' || !item.label) throw new Error(`checks[${index}] needs a "label"`);
@@ -190,6 +198,30 @@ export function parseFaultFlag(value: string): FaultSpec {
   return parsePlan({ faults: [{ tool: target.slice(0, colon), kind: target.slice(colon + 1), ...(calls && { calls }) }] }).faults[0]!;
 }
 
+/** Adds text to a copy of a tool result: inside the first JSON string field called `field`, or at the end. */
+function plant(result: CallToolResult, text: string, field?: string): CallToolResult {
+  const content = result.content.map(block => ({ ...block }));
+  const block = content.find(item => item.type === 'text');
+  if (!block || block.type !== 'text') return { ...result, content: [...content, { type: 'text', text }] };
+  let planted = false;
+  const visit = (value: unknown): unknown => {
+    if (planted || typeof value !== 'object' || value === null) return value;
+    if (Array.isArray(value)) return value.map(visit);
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => {
+      if (!planted && name === field && typeof item === 'string') { planted = true; return [name, item + text]; }
+      return [name, visit(item)];
+    }));
+  };
+  if (field) {
+    try {
+      const filled = JSON.stringify(visit(JSON.parse(block.text)));
+      if (planted) block.text = filled;
+    } catch { /* not JSON: fall through to the end of the text */ }
+  }
+  if (!planted) block.text += text;
+  return { ...result, content };
+}
+
 function toFault(spec: FaultSpec): Fault {
   const when = { calls: spec.calls };
   // plain wording on purpose: a real timeout doesn't tell the agent that the outcome is unknown
@@ -199,6 +231,8 @@ function toFault(spec: FaultSpec): Fault {
     case 'timeout-before-commit': return faults.timeoutBeforeCommit({ ...when, error: timeout });
     case 'rate-limit': return faults.rateLimit({ ...when, retryAfterMs: spec.retryAfterMs });
     case 'malformed-response': return faults.malformedResponse({ ...when, replaceWith: () => ({ content: [] }) });
+    // the call runs and its real result comes back, with the text added
+    case 'planted-text': return faults.malformedResponse({ ...when, replaceWith: result => plant(result as CallToolResult, spec.text ?? '', spec.field) });
   }
 }
 
@@ -343,7 +377,12 @@ export function createFaultProxy(options: { upstream: Client; faults?: FaultSpec
 
   /** The trace and checks so far. A run with no checks is reported as unchecked instead of passed. */
   function report(): Report {
-    const result = lab.result();
+    const { checks: recorded, events: raw } = lab.result();
+    const plantedIn = new Set(planned.filter(spec => spec.kind === 'planted-text').map(spec => spec.tool));
+    // the SDK words every replaced result as malformed, which is wrong for one that is intact with text added
+    const events = raw.map(event => event.kind === 'fault.injected' && plantedIn.has(event.data.tool as string) && 'response' in event.data
+      ? { ...event, message: `${event.data.tool} returned its result with text planted in it` } : event);
+    const result = { checks: recorded, events };
     if (!checked) return { status: 'unchecked', checks: [], events: result.events };
     const unused = unusedFaults();
     // a fault that never fired tested nothing, so the checks can't count as a pass
