@@ -53,7 +53,30 @@ npx cdk synth
 
 ## Deploy
 
-GitHub Actions type checks, tests and synthesizes this stack on every push, but deploys are run by hand. This account was created through AWS's free plan sign-up, which places it in an AWS-managed organization whose policy blocks creating identity providers. GitHub's keyless OIDC sign-in needs one, and the alternative is a long-lived access key in GitHub that can deploy anything, so deploys stay on a laptop signed in with `aws login`.
+GitHub Actions type checks, tests and synthesizes this stack on every push. On `main`, once both of those jobs pass, a third job runs `cdk deploy`. The first deploy, and bootstrapping, are still run by hand as described below.
+
+### How the deploy job signs in
+
+This account was created through AWS's free plan sign-up, which places it in an AWS-managed organization whose policy blocks creating identity providers. GitHub's keyless OIDC sign-in needs one, so the job signs in with an access key instead. The key is long-lived, and these things limit it:
+
+- It belongs to an IAM user, `faultline-deploy`, whose only permission is to assume the roles that `cdk bootstrap` created (`deploy/policy.json`). Those roles can change anything in the account through CloudFormation, so treat the key as able to deploy anything.
+- It is stored as a secret of a GitHub environment, `production`, that only runs from `main` can use. Pull requests from forks never receive it.
+- The workflow hands it to the deploy step alone, after dependencies are installed.
+- The job hides the account ID in its log and leaves out the stack's outputs, because this repository's logs are public.
+
+Set it up once, after signing in with `aws login`. The script creates the user, the environment and a new key, and sends the key straight from AWS to GitHub without printing or saving it. Running it again replaces the key.
+
+```bash
+infra/deploy/setup.sh
+```
+
+Deploys are on while the repository variable `DEPLOY_ENABLED` is `true`. Turn them off before tearing the stack down, or the next push to `main` builds it again.
+
+```bash
+gh variable set DEPLOY_ENABLED --body false
+```
+
+### Deploying by hand
 
 Deploying creates real resources that cost money. Sign in first, since a session lasts 12 hours.
 
@@ -121,8 +144,32 @@ aws cloudwatch set-alarm-state --profile faultline --alarm-name faultline-dead-l
 
 ## Tear down
 
+Turn off deploys from GitHub first, so a later push doesn't rebuild the stack.
+
+```bash
+gh variable set DEPLOY_ENABLED --body false
+```
+
 This deletes everything the stack created, including the database and its data. The bootstrap resources stay and cost a few cents a month at most.
 
 ```bash
 npx cdk destroy --profile faultline
+```
+
+The deploy user is not part of the stack. If deploys won't be turned back on, delete its key and then the user. The first command prints the key's ID for the second.
+
+```bash
+aws iam list-access-keys --profile faultline --user-name faultline-deploy --query 'AccessKeyMetadata[].AccessKeyId' --output text
+```
+
+```bash
+aws iam delete-access-key --profile faultline --user-name faultline-deploy --access-key-id <AccessKeyId>
+```
+
+```bash
+aws iam delete-user-policy --profile faultline --user-name faultline-deploy --policy-name assume-cdk-roles
+```
+
+```bash
+aws iam delete-user --profile faultline --user-name faultline-deploy
 ```

@@ -40,3 +40,37 @@ jobs:
       # Builds the CloudFormation template and both function bundles without touching AWS.
       - run: npx cdk synth --quiet
         working-directory: infra
+  deploy:
+    # DEPLOY_ENABLED is the off switch: without it a push would rebuild a stack torn down to save money
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    needs: [test, infra]
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            infra/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+      # the key reaches this step only, so install scripts never see it
+      - name: Deploy the stack
+        shell: bash
+        working-directory: infra
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-2
+        run: |
+          # this repo's logs are public: mask the account ID and drop the stack's outputs
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          echo "::add-mask::$account"
+          npx cdk deploy --require-approval never --no-color 2>&1 | sed -E '/^Faultline\.[A-Za-z0-9]+ = /d'
