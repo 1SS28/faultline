@@ -11,7 +11,7 @@ export async function request<T>(path: string, body?: unknown, headers?: Record<
       signal: AbortSignal.timeout(20_000),
     });
   } catch (error) {
-    // fetch rejects with no status when the server is down or slow; the browser's own message ("Failed to fetch") explains nothing.
+    // the browser's own "Failed to fetch" explains nothing, so say what to do
     if (error instanceof DOMException && error.name === 'TimeoutError') throw new Error('The local API took too long to respond. Check that it is still running.');
     throw new Error('Could not reach the local API. Start it with npm start, then try again.');
   }
