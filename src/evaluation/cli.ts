@@ -16,27 +16,39 @@ const { values } = parseArgs({ options: {
   'max-turns': { type: 'string', default: '6' }, 'max-output-tokens': { type: 'string' },
   'accept-costs': { type: 'boolean', default: false }, help: { type: 'boolean', default: false },
 } });
+const help = `Faultline evaluation
+  npm run evaluate -- --provider fixture --agent resilient --trials 3
+  npm run evaluate -- --provider anthropic --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs
+  npm run evaluate -- --provider openai --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs
+
+Live calls need ANTHROPIC_API_KEY or OPENAI_API_KEY and explicit --accept-costs. --prompt baseline|recovery.
+Limits: 1-20 trials per scenario; --max-turns 1-12; --max-output-tokens 128-16000 per call (default 4096 for anthropic, 1024 for openai).`;
 if (values.help) {
-  console.log('Faultline evaluation\n  npm run evaluate -- --provider fixture --agent resilient --trials 3\n  npm run evaluate -- --provider anthropic --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs\n  npm run evaluate -- --provider openai --model MODEL --scenario timeout-after-commit --trials 1 --accept-costs\n\nLive calls need ANTHROPIC_API_KEY or OPENAI_API_KEY and explicit --accept-costs. --prompt baseline|recovery.\nLimits: 1-20 trials per scenario; --max-turns 1-12; --max-output-tokens 128-16000 per call (default 4096 for anthropic, 1024 for openai).');
+  console.log(help);
   process.exit(0);
 }
+// exit 2, so CI can tell a mistyped flag from a failed trial
+const fail = (message: string): never => {
+  console.error(`${message}\n\n${help}`);
+  process.exit(2);
+};
 const trials = Number(values.trials), maxTurns = Number(values['max-turns']);
 const maxOutputTokens = values['max-output-tokens'] === undefined ? undefined : Number(values['max-output-tokens']);
 const credentials = { openai: { key: 'OPENAI_API_KEY', model: 'OPENAI_MODEL' }, anthropic: { key: 'ANTHROPIC_API_KEY', model: 'ANTHROPIC_MODEL' } } as const;
-if (!['fixture', 'openai', 'anthropic'].includes(values.provider!)) throw new Error('Provider must be fixture, anthropic or openai');
-if (!strategies.includes(values.agent as Strategy)) throw new Error('Agent must be naive or resilient');
-if (!['baseline', 'recovery'].includes(values.prompt!)) throw new Error('Prompt must be baseline or recovery');
-if (!Number.isInteger(trials) || trials < 1 || trials > 20) throw new Error('Trials must be 1-20');
-if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 12) throw new Error('max-turns must be 1-12');
-if (maxOutputTokens !== undefined && (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 128 || maxOutputTokens > 16_000)) throw new Error('max-output-tokens must be 128-16000');
-if (values.scenario !== 'all' && !scenarios.includes(values.scenario as Scenario)) throw new Error('Unknown scenario');
+if (!['fixture', 'openai', 'anthropic'].includes(values.provider!)) fail('Provider must be fixture, anthropic or openai');
+if (!strategies.includes(values.agent as Strategy)) fail('Agent must be naive or resilient');
+if (!['baseline', 'recovery'].includes(values.prompt!)) fail('Prompt must be baseline or recovery');
+if (!Number.isInteger(trials) || trials < 1 || trials > 20) fail('Trials must be 1-20');
+if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 12) fail('max-turns must be 1-12');
+if (maxOutputTokens !== undefined && (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 128 || maxOutputTokens > 16_000)) fail('max-output-tokens must be 128-16000');
+if (values.scenario !== 'all' && !scenarios.includes(values.scenario as Scenario)) fail(`Unknown scenario. Scenarios: ${scenarios.join(', ')}`);
 const live = values.provider !== 'fixture';
 const env = live ? credentials[values.provider as keyof typeof credentials] : undefined;
 const model = values.model ?? (env && process.env[env.model]);
 const apiKey = env && process.env[env.key];
-if (env && (!values['accept-costs'] || !apiKey || !model)) throw new Error(`Live evaluation requires ${env.key}, an explicit model, and --accept-costs. No model request was sent.`);
+if (env && (!values['accept-costs'] || !apiKey || !model)) fail(`Live evaluation requires ${env.key}, an explicit model, and --accept-costs. No model request was sent.`);
 const promptVariant = values.prompt as 'baseline' | 'recovery';
-// Each trial gets a fresh adapter; the transport (and its HTTP client) is shared.
+// a fresh adapter per trial; the transport and its HTTP client are shared
 let newAdapter: (() => { agent: Agent; metadata: RunMetadata }) | undefined;
 if (values.provider === 'openai') {
   const transport = openAITransport(apiKey!);

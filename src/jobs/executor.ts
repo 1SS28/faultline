@@ -11,7 +11,7 @@ export function executeFixture(input: JobInput, signal: AbortSignal, timeoutMs =
     const child = fork(fileURLToPath(new URL('./child.ts', import.meta.url)), [], {
       execArgv: ['--import', 'tsx', '--max-old-space-size=128'],
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      // Do not give fixture processes database credentials or unrelated API secrets.
+      // the child gets no database credentials or API keys
       env: { PATH: process.env.PATH, NODE_ENV: 'production' },
     });
     let run: Run | undefined;

@@ -13,7 +13,15 @@ function display(run: Run) {
 }
 const [command = 'help', scenarioArg, strategyArg] = process.argv.slice(2);
 if (!['demo', 'run', 'history', 'summary', 'regressions'].includes(command)) {
-  console.log('Faultline: crash tests for agent tool workflows\n\n  npm run demo\n  npm run faultline -- run <scenario> <naive|resilient>\n  npm run faultline -- history\n  npm run faultline -- summary\n  npm run faultline -- regressions\n\nScenarios: ' + scenarios.join(', '));
+  console.log(`Faultline: crash tests for agent tool workflows
+
+  npm run demo
+  npm run faultline -- run <scenario> <naive|resilient>
+  npm run faultline -- history
+  npm run faultline -- summary
+  npm run faultline -- regressions
+
+Scenarios: ${scenarios.join(', ')}`);
   if (command !== 'help') process.exitCode = 2;
 } else if (command === 'run' && (!scenarios.includes(scenarioArg as Scenario) || !strategies.includes(strategyArg as Strategy))) {
   console.error('Specify a valid scenario and strategy. Run npm run faultline for help.');
@@ -29,7 +37,7 @@ if (!['demo', 'run', 'history', 'summary', 'regressions'].includes(command)) {
       const regressions = await store.regressions();
       if (regressions.length) console.table(regressions);
       else console.log('No regressions. No agent version passes a scenario less often than the version before it.');
-      // Exits 1 when something regressed, so CI can use this as a gate.
+      // exit 1 on a regression, so CI can gate on it
       process.exitCode = regressions.length ? 1 : 0;
     }
     else {
@@ -44,7 +52,7 @@ if (!['demo', 'run', 'history', 'summary', 'regressions'].includes(command)) {
       const reportPath = `.faultline/reports/${runs[0]!.id}.json`;
       await writeFile(reportPath, JSON.stringify({ fixture: true, runs }, null, 2));
       console.log(`\nSaved report: ${reportPath}`);
-      // Demo succeeds only if the broken fixture fails and the fixed fixture passes.
+      // the demo passes only if the broken fixture fails and the fixed one passes
       process.exitCode = command === 'demo'
         ? (runs[0]?.status === 'failed' && runs[1]?.status === 'passed' ? 0 : 1)
         : (runs[0]?.status === 'passed' ? 0 : 1);

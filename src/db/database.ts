@@ -12,7 +12,7 @@ export interface Database extends Sql {
 export async function connectDatabase(options: { url?: string; directory?: string; memory?: boolean } = {}): Promise<Database> {
   if (options.url) {
     const pool = new pg.Pool({ connectionString: options.url, max: 5 });
-    // An idle connection the server drops would otherwise crash the process with an unhandled error.
+    // without a handler, a dropped idle connection crashes the process
     pool.on('error', error => console.error('Idle database connection failed:', error.message));
     return {
       query: (sql, params) => pool.query(sql, params),
@@ -33,7 +33,7 @@ export async function connectDatabase(options: { url?: string; directory?: strin
   }
   const directory = options.memory ? undefined : options.directory ?? '.faultline/data';
   if (directory) await mkdir(directory, { recursive: true });
-  // Loaded only here, so server deployments such as the AWS worker don't need the embedded database.
+  // loaded only here, so the AWS functions don't bundle the embedded database
   const { PGlite } = await import('@electric-sql/pglite');
   const db = new PGlite(directory);
   await db.waitReady;

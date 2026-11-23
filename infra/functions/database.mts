@@ -11,7 +11,7 @@ interface DatabaseSecret { username: string; password: string; host: string; por
 export async function openStores(): Promise<Stores> {
   const { SecretString } = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: process.env.DATABASE_SECRET_ARN }));
   const secret = JSON.parse(SecretString ?? '{}') as DatabaseSecret;
-  // verify-full checks that the server's certificate was issued by Amazon RDS for this host name.
+  // verify-full: the certificate must be Amazon RDS's, for this host name
   const ca = fileURLToPath(new URL('./rds-ca.pem', import.meta.url));
   const url = `postgres://${encodeURIComponent(secret.username)}:${encodeURIComponent(secret.password)}@${secret.host}:${secret.port}/${secret.dbname}`
     + `?sslmode=verify-full&sslrootcert=${encodeURIComponent(ca)}`;

@@ -30,17 +30,15 @@ export class FaultlineStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    // A private network across two availability zones, which RDS requires. It has no internet
-    // gateway and no NAT gateway, so nothing inside can reach the internet and nothing outside
-    // can reach in. A NAT gateway would cost more than the database.
+    // private network in two zones, which RDS requires. no internet or NAT gateway, so nothing
+    // gets in or out. a NAT gateway would cost more than the database
     this.vpc = new ec2.Vpc(this, 'Network', {
       maxAzs: 2,
       natGateways: 0,
       subnetConfiguration: [{ name: 'private', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 }],
     });
 
-    // The database's firewall. It starts with no inbound rules. The worker is let in below by
-    // naming its security group, not by IP address.
+    // starts with no inbound rules. the functions are let in below by security group, not by IP
     this.databaseSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSecurityGroup', {
       vpc: this.vpc,
       description: 'Faultline Postgres',
@@ -48,11 +46,9 @@ export class FaultlineStack extends Stack {
     });
 
     this.database = new rds.DatabaseInstance(this, 'Database', {
-      // Major version only, matching the embedded Postgres the app runs locally. RDS applies
-      // minor updates itself, and pinning a minor version here would make the next deploy
-      // try to roll them back.
+      // major version only: RDS applies minor updates itself, and a pinned minor would roll them back
       engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.of('18', '18') }),
-      // The smallest class, and one of the two the AWS free plan allows.
+      // smallest class, and one of the two the free plan allows
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE4_GRAVITON, ec2.InstanceSize.MICRO),
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
@@ -60,55 +56,49 @@ export class FaultlineStack extends Stack {
       publiclyAccessible: false,
       multiAz: false,
       databaseName: 'faultline',
-      // A password is generated at deploy time and kept in Secrets Manager. It never appears
-      // in this code or in the CloudFormation template.
+      // generated at deploy time, and kept only in Secrets Manager
       credentials: rds.Credentials.fromGeneratedSecret('faultline'),
       allocatedStorage: 20,
       storageType: rds.StorageType.GP3,
       storageEncrypted: true,
       backupRetention: Duration.days(1),
       deleteAutomatedBackups: true,
-      // This database holds test runs, not customer data, so tearing the stack down deletes it
-      // without keeping a final snapshot that would keep costing money.
+      // test runs only, so teardown deletes it with no final snapshot to pay for
       deletionProtection: false,
       removalPolicy: RemovalPolicy.DESTROY,
     });
     const databaseSecret = this.database.secret!;
 
-    // Messages the worker failed on five times in a row land here instead of retrying forever.
+    // messages that failed five times land here instead of retrying forever
     this.deadLetterQueue = new sqs.Queue(this, 'DeadLetterQueue', {
       retentionPeriod: Duration.days(14),
       encryption: sqs.QueueEncryption.SQS_MANAGED,
       enforceSSL: true,
     });
 
-    // Each message asks for one fixture trial, such as {"scenario":"rate-limit","strategy":"naive"}.
+    // one message per fixture trial: {"scenario":"rate-limit","strategy":"naive"}
     this.queue = new sqs.Queue(this, 'JobQueue', {
-      // Six times the worker's timeout, as AWS recommends, so a message isn't handed to a
-      // second worker while the first is still running it.
+      // 6x the worker's timeout, per AWS guidance, so a running message isn't handed to a second worker
       visibilityTimeout: Duration.minutes(3),
       encryption: sqs.QueueEncryption.SQS_MANAGED,
       enforceSSL: true,
-      // More than the job table's three attempts, so a job can use all of them before its
-      // message is given up on.
+      // more than the job table's three attempts, so a job can use them all
       deadLetterQueue: { queue: this.deadLetterQueue, maxReceiveCount: 5 },
     });
 
-    // The functions have no internet access, so they read the database password through a private
-    // connection to Secrets Manager. One availability zone is enough here and halves the cost.
+    // no internet, so the password is read over a private endpoint. one zone halves the cost
     const secretsEndpoint = this.vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
       subnets: { subnets: [this.vpc.isolatedSubnets[0]!] },
       open: false,
     });
 
-    // Each function gets its own firewall that can reach only the database and Secrets Manager,
-    // and permission to read only the database password.
+    // each function can reach only the database and Secrets Manager, and read only the password
     const privateFunction = (id: string, entry: string, description: string, timeout: Duration) => {
       const securityGroup = new ec2.SecurityGroup(this, `${id}SecurityGroup`, { vpc: this.vpc, description, allowAllOutbound: false });
       const fn = new nodejs.NodejsFunction(this, id, {
         entry: path.join(repoRoot, 'infra/functions', entry),
-        // The functions import the app's own code from src/, so they bundle from the repo root.
+        // bundles from the repo root, because the functions import src/
         projectRoot: repoRoot,
         depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
         runtime: lambda.Runtime.NODEJS_24_X,
@@ -126,14 +116,14 @@ export class FaultlineStack extends Stack {
         bundling: {
           format: nodejs.OutputFormat.ESM,
           mainFields: ['module', 'main'],
-          // The Postgres driver is CommonJS and calls require(), which an ES module bundle has to provide.
+          // pg is CommonJS and calls require(), which an ES module bundle has to provide
           banner: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
-          // The AWS SDK comes with the Lambda runtime. The others are never loaded on the server.
+          // the AWS SDK ships with the runtime; the others are never loaded on the server
           externalModules: ['@aws-sdk/*', 'pg-native', '@electric-sql/pglite'],
           commandHooks: {
             beforeBundling: () => [],
             beforeInstall: () => [],
-            // The migrations, and the certificates that prove the database is really Amazon RDS in us-east-2.
+            // the migrations, and the RDS certificates for us-east-2
             afterBundling: (inputDir, outputDir) => [
               `cp -R "${inputDir}/sql" "${outputDir}/sql"`,
               `cp "${inputDir}/infra/functions/rds-ca-us-east-2.pem" "${outputDir}/rds-ca.pem"`,
@@ -151,12 +141,11 @@ export class FaultlineStack extends Stack {
     this.worker.addEventSource(new SqsEventSource(this.queue, {
       batchSize: 5,
       reportBatchItemFailures: true,
-      // At most two workers at once, which also keeps connections to the small database low.
+      // two workers at most, which keeps connections to the small database low
       maxConcurrency: 2,
     }));
 
-    // The HTTP API. Every request needs an API key. POST /jobs goes straight from API Gateway to
-    // the queue with no function in between, and the GET routes read results from the database.
+    // every request needs an API key. POST /jobs goes straight to the queue; GETs read the database
     this.api = new apigateway.RestApi(this, 'Api', {
       restApiName: 'faultline',
       description: 'Faultline jobs and runs',
@@ -166,8 +155,7 @@ export class FaultlineStack extends Stack {
       cloudWatchRole: false,
     });
 
-    // API Gateway rejects a malformed body before it reaches the queue. The lists come from the
-    // app's own code, so a new scenario is accepted as soon as it exists.
+    // a malformed body is rejected before the queue. the lists come from src/, so a new scenario is accepted at once
     const jobRequest = this.api.addModel('JobRequest', {
       contentType: 'application/json',
       schema: {
@@ -190,7 +178,7 @@ export class FaultlineStack extends Stack {
       integrationHttpMethod: 'POST',
       options: {
         credentialsRole: queueRole,
-        // Anything that isn't JSON is refused instead of being passed to the queue unchecked.
+        // non-JSON bodies are refused, not passed through unchecked
         passthroughBehavior: apigateway.PassthroughBehavior.NEVER,
         requestParameters: { 'integration.request.header.Content-Type': "'application/x-www-form-urlencoded'" },
         requestTemplates: { 'application/json': 'Action=SendMessage&MessageBody=$util.urlEncode($input.body)' },
@@ -214,7 +202,7 @@ export class FaultlineStack extends Stack {
     this.api.root.addResource('summary').addMethod('GET', read);
     this.api.root.addResource('regressions').addMethod('GET', read);
 
-    // Each key is limited separately from the stage-wide limit above.
+    // per-key limits, on top of the stage-wide one above
     const apiKey = this.api.addApiKey('ApiKey', { description: 'Faultline default key' });
     const usagePlan = this.api.addUsagePlan('UsagePlan', {
       throttle: { rateLimit: 2, burstLimit: 5 },
@@ -223,12 +211,10 @@ export class FaultlineStack extends Stack {
     usagePlan.addApiKey(apiKey);
     usagePlan.addApiStage({ stage: this.api.deploymentStage });
 
-    // Alarms notify this topic, in both directions: when something breaks and when it recovers.
-    // An email address is subscribed once from the CLI, so no personal address is stored in this
-    // public repo.
+    // alarms notify here when something breaks and when it recovers. the email is subscribed
+    // from the CLI, so no address is stored in this public repo
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', { displayName: 'Faultline alarms', enforceSSL: true });
-    // The encrypted-only rule replaces the topic's default access policy, so CloudWatch needs an
-    // explicit grant. It is limited to this account's Faultline alarms.
+    // enforceSSL replaces the default policy, so CloudWatch needs its own grant, limited to this account's faultline alarms
     this.alarmTopic.addToResourcePolicy(new iam.PolicyStatement({
       sid: 'AllowFaultlineAlarms',
       principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
@@ -248,7 +234,7 @@ export class FaultlineStack extends Stack {
         threshold,
         evaluationPeriods: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-        // No data means no traffic, which is normal for this stack.
+        // no data means no traffic, which is normal here
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       });
       created.addAlarmAction(notify);
@@ -258,16 +244,14 @@ export class FaultlineStack extends Stack {
     alarm('DeadLetterAlarm', 'faultline-dead-letters',
       'A message failed five times and moved to the dead-letter queue. Read it there, fix the cause, then delete it.',
       this.deadLetterQueue.metricApproximateNumberOfMessagesVisible(fiveMinutes), 1);
-    // Failed trials and messages the worker retries don't count here. This catches the worker
-    // itself failing, usually because it couldn't reach the database or ran out of time.
+    // the worker itself failing, not failed trials or retried messages
     alarm('WorkerErrorAlarm', 'faultline-worker-errors',
       'The worker crashed or timed out. Check the worker log.',
       this.worker.metricErrors(fiveMinutes), 1);
     alarm('ApiErrorAlarm', 'faultline-api-errors',
       'The API returned a 5xx error. Check the API reader log, or the queue if POST /jobs failed.',
       this.api.metricServerError(fiveMinutes), 1);
-    // A message that keeps failing leaves for the dead-letter queue within about 15 minutes, so
-    // anything older means the worker is down or falling behind.
+    // a failing message reaches the dead-letter queue in about 15 minutes, so older means the worker is down
     alarm('QueueBacklogAlarm', 'faultline-queue-backlog',
       'A job has waited more than 20 minutes, so the worker is down or falling behind.',
       this.queue.metricApproximateAgeOfOldestMessage(fiveMinutes), 20 * 60);

@@ -9,7 +9,7 @@ export const agents: Array<{ key: Strategy; name: string }> = [
   { key: 'resilient', name: 'Careful agent' },
 ];
 
-// Stories describe what the built-in agents do in each scenario. tests/runner.test.ts pins the behavior they rely on.
+// what the built-in agents do in each scenario; tests/runner.test.ts pins it
 export const scenarios: Array<{ key: Scenario; name: string; question: string; stories: Record<Strategy, string> }> = [
   { key: 'timeout-after-commit', name: 'Lost reply', question: 'The refund goes through, but the reply never arrives. Does the agent retry without paying twice?',
     stories: { naive: 'The refund went through but the reply was lost. It tried again and refunded the customer a second time.', resilient: 'Same lost reply. It retried with the same request ID, so the service returned the first refund instead of making a new one.' } },

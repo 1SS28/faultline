@@ -18,21 +18,21 @@ export function summarizeTrials(runs: Run[]) {
     const count = group.length, passed = group.filter(run => run.status === 'passed').length;
     const p = passed / count;
     const live = group.every(run => run.metadata?.provider !== undefined && run.metadata.provider !== 'fixture');
+    const keys = [...new Set(group.flatMap(run => run.assertions.map(item => item.key)))];
+    const sum = (field: 'modelCalls' | 'inputTokens' | 'outputTokens' | 'textOnlyTurns' | 'truncatedTurns') =>
+      group.reduce((total, run) => total + (run.metadata?.[field] ?? 0), 0);
     return {
       agentVersion: group[0]!.agentVersion, scenario: group[0]!.scenario, trials: count, passed,
       passRate: Math.round(p * 10000) / 100,
-      // Nominal interval assumes independent trials; not meaningful for deterministic fixtures.
+      // an interval means nothing for deterministic fixtures
       confidence95: live ? wilson95(passed, count) : null,
-      failedAssertions: Object.fromEntries([...new Set(group.flatMap(run => run.assertions.map(item => item.key)))].map(key => [key, group.filter(run => run.assertions.some(item => item.key === key && !item.passed)).length])),
-      // Separates the model's own finish call from loop limits, so an exhausted turn budget never reads as a deliberate escalation.
+      failedAssertions: Object.fromEntries(keys.map(key => [key, group.filter(run => run.assertions.some(item => item.key === key && !item.passed)).length])),
+      // so an exhausted turn budget never reads as a deliberate escalation
       stopReasons: live ? group.reduce<Record<string, number>>((counts, run) => {
         const reason = run.metadata?.stopReason ?? 'unknown'; counts[reason] = (counts[reason] ?? 0) + 1; return counts;
       }, {}) : null,
-      modelCalls: group.reduce((sum, run) => sum + (run.metadata?.modelCalls ?? 0), 0),
-      inputTokens: group.reduce((sum, run) => sum + (run.metadata?.inputTokens ?? 0), 0),
-      outputTokens: group.reduce((sum, run) => sum + (run.metadata?.outputTokens ?? 0), 0),
-      textOnlyTurns: group.reduce((sum, run) => sum + (run.metadata?.textOnlyTurns ?? 0), 0),
-      truncatedTurns: group.reduce((sum, run) => sum + (run.metadata?.truncatedTurns ?? 0), 0),
+      modelCalls: sum('modelCalls'), inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
+      textOnlyTurns: sum('textOnlyTurns'), truncatedTurns: sum('truncatedTurns'),
     };
   });
 }

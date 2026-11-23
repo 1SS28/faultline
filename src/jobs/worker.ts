@@ -23,7 +23,7 @@ export class JobWorker {
       });
     }, delay);
   }
-  /** A single durable claim/execution cycle; exposed for deterministic integration tests. */
+  /** One claim-and-run cycle. Public so tests can step the worker. */
   async tick(): Promise<boolean> {
     const claim = await this.jobs.claim();
     if (!claim) return false;
@@ -40,23 +40,23 @@ export class JobWorker {
         if (!owned) controller.abort();
       }, () => controller.abort()).finally(() => { renewal = undefined; });
     }, 5000);
+    // a renewal still in flight has to land before the lease is checked
+    const settle = async () => { clearInterval(heartbeat); await renewal; };
     try {
       const run = await this.execute(claim.job, controller.signal);
-      clearInterval(heartbeat);
-      await renewal;
+      await settle();
       if (!controller.signal.aborted) await this.jobs.complete(claim, run);
     } catch (error) {
-      clearInterval(heartbeat);
-      await renewal;
+      await settle();
       if (!controller.signal.aborted) {
         await this.jobs.fail(claim, error instanceof Error ? error.message : 'Execution failed', Math.min(30_000, 1000 * 2 ** (claim.job.attempts - 1)));
       }
-    } finally { clearInterval(heartbeat); }
+    }
   }
   async stop() {
     this.stopped = true;
     clearTimeout(this.timer);
-    // The executor has a bounded deadline; let an in-flight result commit before closing SQL.
+    // the executor has a deadline, so wait for an in-flight result before the database closes
     await this.active;
   }
 }

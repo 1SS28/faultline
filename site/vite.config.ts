@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-// Public product site. It is deployed on its own (see vercel.json) and needs no API: the demo runs src/core in the browser.
+// deployed on its own (see vercel.json); needs no API because the demo runs src/core in the browser
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [react()],

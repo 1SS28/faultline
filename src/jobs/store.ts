@@ -28,7 +28,7 @@ export class JobStore {
     });
   }
   async get(id: string): Promise<JobDetail | undefined> {
-    // One transaction gives job state and attempt history a coherent serialized view in local mode.
+    // one transaction, so the job and its attempt history are read as of the same moment
     return this.db.transaction(async tx => {
       const { rows: [row] } = await tx.query(`SELECT ${fields} FROM jobs WHERE id = $1 FOR SHARE`, [id]);
       if (!row) return undefined;
@@ -53,7 +53,7 @@ export class JobStore {
   async claim(leaseMs = 30_000, jobId?: string): Promise<Claim | undefined> {
     if (!Number.isInteger(leaseMs) || leaseMs < 100 || leaseMs > 300_000) throw new Error('Invalid lease duration');
     return this.db.transaction(async tx => {
-      // Exhausted worker crashes must reach a terminal state, even with no other ready jobs.
+      // a job whose last attempt crashed still has to end as errored, even with nothing else to claim
       await tx.query(`WITH exhausted AS (
         UPDATE jobs SET status = 'errored', lease_token = NULL, lease_until = NULL,
           error = 'Worker lease expired; retry budget exhausted', updated_at = now()

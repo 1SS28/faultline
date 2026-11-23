@@ -18,10 +18,9 @@ export class RunStore {
   async migrate(directory = new URL('../../sql/', import.meta.url)) {
     const sql = (await Promise.all(['001_initial.sql', '002_jobs.sql', '003_run_metadata.sql', '004_drop_billing.sql'].map(name => readFile(new URL(name, directory), 'utf8')))).join('\n');
     await this.db.transaction(async tx => {
-      // Processes that start together, such as two cold-starting workers, take turns instead of
-      // racing to create the same tables.
+      // two workers starting together take turns instead of racing to create tables
       await tx.query('SELECT pg_advisory_xact_lock(4310)');
-      // Initial migration contains no procedural blocks or semicolons inside literals.
+      // safe to split on ";": no procedural blocks, no semicolons inside literals
       for (const statement of sql.split(';').filter(statement => statement.trim())) await tx.query(statement);
     });
   }

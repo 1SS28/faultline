@@ -39,7 +39,7 @@ export async function processDelivery(jobs: JobStore, input: JobInput, messageId
   }
   const current = await jobs.get(job.id);
   if (!current) throw new Error(`Job ${job.id} no longer exists`);
-  // Either queued for a retry or running under another delivery's lease.
+  // queued for a retry, or running under another delivery's lease
   if (!finished(current)) throw new RetryLater(`Job ${job.id} is ${current.status}${current.error ? `: ${current.error}` : ''}`);
   const { history: _history, ...result } = current;
   return result;

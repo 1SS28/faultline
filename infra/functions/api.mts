@@ -6,10 +6,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult =>
   ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-/**
- * The read side of the API. API Gateway checks the API key and sends POST /jobs straight to SQS,
- * so this function only answers GET requests.
- */
+/** The read side of the API. API Gateway checks the key and sends POST /jobs straight to SQS, so only GETs arrive here. */
 export function createHandler(stores: () => Promise<Stores>) {
   return async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     const id = event.pathParameters?.id;
@@ -24,7 +21,7 @@ export function createHandler(stores: () => Promise<Stores>) {
         }
         case 'GET /summary': return json(200, { summary: await runs.summary() });
         case 'GET /regressions': return json(200, { regressions: await runs.regressions() });
-        // The ID is the one POST /jobs returned, which is the SQS message ID.
+        // the ID POST /jobs returned is the SQS message ID
         case 'GET /jobs/{id}': {
           const job = await jobs.getByIdempotencyKey(deliveryKey(id!));
           if (!job) return json(404, { error: 'Job not found. It may still be waiting in the queue.' });

@@ -16,7 +16,7 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
         runId: job.runId ?? undefined, run: run?.status, failedChecks: run?.assertions.filter(check => !check.passed).map(check => check.label),
       }));
     } catch (error) {
-      // Reporting only this message as failed lets SQS retry it without redelivering the rest of the batch.
+      // only this message is retried, not the rest of the batch
       batchItemFailures.push({ itemIdentifier: record.messageId });
       const log = error instanceof RetryLater ? console.warn : console.error;
       log(JSON.stringify({ messageId: record.messageId, retry: true, error: error instanceof Error ? error.message : String(error) }));
