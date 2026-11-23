@@ -1,7 +1,7 @@
 import { ToolFailure } from '../../packages/sdk/src/index.js';
 import { supportsIdempotencyKeys, type Refund, type RefundRequest, type Scenario, type TraceEvent } from './types.js';
 
-// One error class across the built-in agents, the model adapters and the SDK, so `instanceof ToolFailure` means the same everywhere.
+// the SDK's class, so `instanceof ToolFailure` means the same everywhere
 export { ToolFailure };
 
 export class ToolBudgetExhausted extends Error {
@@ -31,7 +31,8 @@ export class RefundSimulator {
     this.calls++;
     this.record('tool.request', 'issue_refund requested', { ...request, attempt: this.calls });
     if (this.calls > this.maxCalls) throw new ToolBudgetExhausted();
-    if (!request.orderId || !Number.isSafeInteger(request.amountCents) || request.amountCents <= 0) {
+    // above 2^31-1 cents the ledger's integer column couldn't hold it, and the run would be lost instead of failed
+    if (!request.orderId || !Number.isSafeInteger(request.amountCents) || request.amountCents <= 0 || request.amountCents > 2_147_483_647) {
       throw new Error('Invalid refund request');
     }
     if (this.scenario === 'rate-limit') {

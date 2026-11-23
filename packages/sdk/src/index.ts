@@ -33,10 +33,14 @@ export const realClock: Clock = { now: () => Math.round(performance.now()), slee
 
 type When = { calls?: number[] };
 type ErrorFactory = { error?: () => Error };
-export type Fault =
+export type Fault = (
   | { kind: 'timeout-after-commit' | 'timeout-before-commit'; calls: number[]; error?: () => Error }
   | { kind: 'rate-limit'; calls: number[]; retryAfterMs: number; error?: () => Error }
-  | { kind: 'malformed-response'; calls: number[]; replaceWith: (result: unknown) => unknown };
+  | { kind: 'malformed-response'; calls: number[]; replaceWith: (result: unknown) => unknown }
+) & {
+  /** What to call the fault when it is reported as never fired. Defaults to its kind. */
+  label?: string;
+};
 
 /** Each fault applies to the listed call numbers of one tool, counting from 1. The default is the first call. */
 export const faults = {
@@ -61,8 +65,14 @@ export function createLab(options: { clock?: Clock } = {}) {
   const events: LabEvent[] = [];
   const checks: Check[] = [];
   const executions = new Map<string, number>();
+  const planned: Array<{ tool: string; call: number; label: string }> = [];
   const record = (kind: LabEvent['kind'], message: string, data: Record<string, unknown> = {}) => {
     events.push({ sequence: events.length + 1, timeMs: clock.now(), kind, message, data });
+  };
+
+  const unfired = (): string[] => {
+    const fired = new Set(events.filter(event => event.kind === 'fault.injected').map(event => `${event.data.tool}#${event.data.call}`));
+    return planned.filter(item => !fired.has(`${item.tool}#${item.call}`)).map(item => `${item.tool} call ${item.call} (${item.label})`);
   };
 
   return {
@@ -72,9 +82,22 @@ export function createLab(options: { clock?: Clock } = {}) {
       let calls = 0;
       let availableAt = -Infinity;
       let limit: Extract<Fault, { kind: 'rate-limit' }> | undefined;
+      // A plan that can't happen as written is refused here, not discovered after the agent has run.
+      const taken = new Set<number>();
+      for (const fault of plan) {
+        if (!Array.isArray(fault.calls) || !fault.calls.length || !fault.calls.every(call => Number.isInteger(call) && call > 0)) throw new Error(`A fault on ${name} needs call numbers, counting from 1`);
+        if (fault.kind === 'rate-limit' && !(Number.isFinite(fault.retryAfterMs) && fault.retryAfterMs > 0)) throw new Error(`The rate limit on ${name} needs a retryAfterMs above 0`);
+        for (const call of fault.calls) {
+          if (taken.has(call)) throw new Error(`Two faults are planned for call ${call} of ${name}, and only one could fire`);
+          taken.add(call);
+          planned.push({ tool: name, call, label: fault.label ?? fault.kind });
+        }
+      }
       return async (...args: A): Promise<R> => {
         const call = ++calls;
         record('tool.request', `${name} called`, { tool: name, call, args: snapshot(args).value });
+        // Calls made together are all recorded before any is answered, so the trace shows what the agent knew when it made each one.
+        await null;
         const fault = plan.find(item => item.calls.includes(call));
         const fail = (factory: (() => Error) | undefined, fallback: () => Error): never => { throw factory ? factory() : fallback(); };
         if (fault?.kind === 'rate-limit') {
@@ -92,7 +115,13 @@ export function createLab(options: { clock?: Clock } = {}) {
           record('fault.injected', `${name} timed out before reaching the service`, { tool: name, call });
           return fail(fault.error, () => new ToolFailure('TIMEOUT', 'Connection timed out; outcome unknown'));
         }
-        const result = await fn(...args);
+        let result: R;
+        try { result = await fn(...args); } catch (error) {
+          // The service's own failure belongs in the trace. A fault planned for this call never fires.
+          const reason = error instanceof Error ? error.message : String(error);
+          record('tool.response', `${name} failed: ${reason}`.slice(0, 120), { tool: name, call, error: reason });
+          throw error;
+        }
         executions.set(name, (executions.get(name) ?? 0) + 1);
         record('tool.commit', `${name} ran against the service`, { tool: name, call });
         if (fault?.kind === 'timeout-after-commit') {
@@ -110,11 +139,15 @@ export function createLab(options: { clock?: Clock } = {}) {
     },
     /** Waits on the lab's clock. Agents that should honour Retry-After call this instead of setTimeout. */
     async wait(ms: number) {
+      // Anything else would turn the virtual clock into NaN, and every rate limit would quietly stop applying.
+      if (!Number.isFinite(ms) || ms < 0) throw new Error(`lab.wait needs a number of milliseconds, 0 or more, and got ${ms}`);
       record('agent.wait', `Wait ${ms}ms`, { durationMs: ms });
       await clock.sleep(ms);
     },
     /** How many times a wrapped tool actually reached your function (faulted calls that never ran are not counted). */
     ran: (name: string) => executions.get(name) ?? 0,
+    /** Planned faults the agent never ran into, such as one on a second call it never made. */
+    unfired,
     /** Records a check. Base it on your service's own records, not on what the agent reports. */
     check(label: string, passed: boolean, details: { expected?: string; actual?: string } = {}) {
       checks.push({ key: `check-${checks.length + 1}`, label, passed, expected: details.expected ?? '', actual: details.actual ?? '' });
@@ -122,6 +155,9 @@ export function createLab(options: { clock?: Clock } = {}) {
     result(): LabResult {
       // A test with no checks proves nothing, so it fails rather than passing by default.
       const all = checks.length ? [...checks] : [{ key: 'has-checks', label: 'The test recorded at least one check', passed: false, expected: '1 or more checks', actual: '0' }];
+      // Neither does one whose fault never fired: the checks held, but nothing was broken.
+      const missed = unfired();
+      if (planned.length) all.push({ key: 'faults-fired', label: 'Every planned fault fired', passed: !missed.length, expected: 'all of them', actual: missed.length ? `never reached: ${missed.join(', ')}` : '' });
       return { status: all.every(check => check.passed) ? 'passed' : 'failed', checks: all, events: [...events] };
     },
   };

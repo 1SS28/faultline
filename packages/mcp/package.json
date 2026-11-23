@@ -15,7 +15,7 @@
   "keywords": ["mcp", "model-context-protocol", "ai", "agents", "testing", "fault-injection", "idempotency"],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "faultline-sdk": "^0.1.0"
+    "faultline-sdk": "^0.2.0"
   },
   "scripts": {
     "prepack": "cd ../.. && npm run build:mcp"

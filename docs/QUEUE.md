@@ -27,6 +27,6 @@ DATABASE_URL=... FAULTLINE_WORKER=external npm start
 DATABASE_URL=... npm run worker
 ```
 
-Multiple server-PostgreSQL workers are supported by the claim design but have not been stress-tested against a real PostgreSQL server. Existing concurrency tests use the embedded engine's single connection. SQS and cloud container orchestration are still future work.
+Multiple server-PostgreSQL workers are supported by the claim design but have not been stress-tested against a real PostgreSQL server. Existing concurrency tests use the embedded engine's single connection. The AWS build in `infra/` delivers jobs through SQS to a Lambda worker, using the same job table. See `infra/README.md`.
 
-Live OpenAI evaluations currently run through the CLI, separately from the fixture job queue.
+Live model evaluations run through the CLI, separately from the fixture job queue.

@@ -1,6 +1,6 @@
 export const scenarios = ['baseline', 'timeout-after-commit', 'rate-limit', 'malformed-response', 'timeout-no-key'] as const;
 export type Scenario = typeof scenarios[number];
-// timeout-no-key models a service with no idempotency support, where the only safe answer to a lost reply is escalation
+// timeout-no-key: no idempotency keys, so the only safe answer to a lost reply is to escalate
 export const supportsIdempotencyKeys = (scenario: Scenario) => scenario !== 'timeout-no-key';
 export const strategies = ['naive', 'resilient'] as const;
 export type Strategy = typeof strategies[number];
@@ -14,7 +14,8 @@ export interface TraceEvent {
   data: Record<string, unknown>;
 }
 export interface Assertion { key: string; label: string; passed: boolean; expected: string; actual: string }
-export interface AgentResult { status: 'completed' | 'escalated'; refundId?: string }
+/** `incomplete` means the harness ended the trial before the agent reported an outcome. It never counts as escalating. */
+export interface AgentResult { status: 'completed' | 'escalated' | 'incomplete'; refundId?: string }
 export interface AgentContext {
   request: RefundRequest;
   /** Whether the refund service honors idempotency keys. When false it ignores them. */

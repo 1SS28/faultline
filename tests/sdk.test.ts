@@ -109,6 +109,29 @@ test('faults apply only to the call numbers they list', async () => {
   assert.equal(service.outbox.length, 3);
 });
 
+test('a test whose planned fault never fired fails instead of passing by default', async () => {
+  const service = emailService();
+  const lab = createLab();
+  // the fault waits for a second call, and this agent only makes one
+  const sendEmail = lab.tool('send_email', service.sendEmail, faults.timeoutAfterCommit({ calls: [2] }));
+  await sendEmail({ to: 'a@example.com', subject: 'Reminder' });
+  lab.check('Customer gets exactly one email', service.outbox.length === 1);
+
+  assert.deepEqual(lab.unfired(), ['send_email call 2 (timeout-after-commit)']);
+  assert.equal(lab.result().status, 'failed');
+  assert.match(formatResult(lab.result()), /✗ Every planned fault fired: never reached: send_email call 2 \(timeout-after-commit\)/);
+
+  // once that call is made the fault fires, and the recorded check decides the result
+  await assert.rejects(sendEmail({ to: 'a@example.com', subject: 'Reminder' }), ToolFailure);
+  assert.deepEqual(lab.unfired(), []);
+  assert.equal(lab.result().status, 'passed');
+
+  // a lab with no faults has nothing to report
+  const plain = createLab();
+  plain.check('Nothing to break', true);
+  assert.deepEqual(plain.result().checks.map(check => check.key), ['check-1']);
+});
+
 test('faults can throw the error type your real client throws', async () => {
   class HttpTimeout extends Error {}
   class TooManyRequests extends Error {}
@@ -137,4 +160,50 @@ test('the trace records arguments and results without keeping live references', 
   const request = lab.result().events.find(event => event.kind === 'tool.request')!;
   assert.deepEqual(request.data.args, [{ to: 'sam@example.com', subject: 'Hi' }]);
   assert.deepEqual(lab.result().events.map(event => event.kind), ['tool.request', 'tool.commit', 'tool.response']);
+});
+
+test('a plan that cannot happen as written is refused before the agent runs', () => {
+  const lab = createLab();
+  const send = async () => 'sent';
+  // only one fault can fire on a call, so the second would count as fired without doing anything
+  assert.throws(() => lab.tool('send_email', send, faults.timeoutAfterCommit(), faults.malformedResponse()), /Two faults are planned for call 1 of send_email/);
+  assert.throws(() => lab.tool('send_email', send, faults.timeoutAfterCommit({ calls: [] })), /needs call numbers, counting from 1/);
+  assert.throws(() => lab.tool('send_email', send, faults.timeoutAfterCommit({ calls: [0] })), /counting from 1/);
+  assert.throws(() => lab.tool('send_email', send, faults.rateLimit({ retryAfterMs: Number.NaN })), /retryAfterMs above 0/);
+});
+
+test('a wait that is not a number is refused instead of switching the rate limit off', async () => {
+  const lab = createLab();
+  const sendEmail = lab.tool('send_email', async () => 'sent', faults.rateLimit({ retryAfterMs: 1000 }));
+  await assert.rejects(sendEmail(), ToolFailure);
+  // an agent that reads retryAfterMs off an error that has none
+  await assert.rejects(lab.wait(undefined as unknown as number), /lab.wait needs a number of milliseconds/);
+  await assert.rejects(lab.wait(Number.NaN), /needs a number/);
+  // the clock is intact, so the limit still stands
+  await assert.rejects(sendEmail(), ToolFailure);
+  assert.equal(lab.clock.now(), 0);
+});
+
+test("the service's own failure is in the trace, and a fault planned for that call does not fire", async () => {
+  const lab = createLab();
+  let down = true;
+  const sendEmail = lab.tool('send_email', async () => { if (down) throw new Error('SMTP server is down'); return 'sent'; }, faults.timeoutAfterCommit());
+  await assert.rejects(sendEmail(), /SMTP server is down/);
+  down = false;
+  assert.equal(await sendEmail(), 'sent');
+  lab.check('The email went out once', lab.ran('send_email') === 1);
+
+  const result = lab.result();
+  assert.deepEqual(result.events.map(event => event.message),
+    ['send_email called', 'send_email failed: SMTP server is down', 'send_email called', 'send_email ran against the service', 'send_email returned']);
+  // the lost reply never happened, so the result can't pass
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(lab.unfired(), ['send_email call 1 (timeout-after-commit)']);
+});
+
+test('calls made together are all recorded before any is answered', async () => {
+  const lab = createLab();
+  const read = lab.tool('read', async () => 'r'), write = lab.tool('write', async () => 'w');
+  await Promise.all([read(), write()]);
+  assert.deepEqual(lab.result().events.slice(0, 2).map(event => event.message), ['read called', 'write called']);
 });

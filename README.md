@@ -55,7 +55,7 @@ npm run faultline -- regressions
 npm start
 ```
 
-A single `run` exits 1 on a detected regression, 0 on success, and 2 for invalid arguments. The deliberately broken fixture should fail. `npm run demo` compares two agents, so its exit semantics differ. `regressions` lists scenarios where an agent version passes less often than the version first tested before it, and exits 1 if there are any, so CI can use it as a gate.
+A single `run` exits 1 on a detected regression, 0 on success, and 2 for invalid arguments. `evaluate` uses the same codes. The deliberately broken fixture should fail. `npm run demo` compares two agents, so its exit semantics differ. `regressions` lists scenarios where an agent version passes less often than the version first tested before it, and exits 1 if there are any, so CI can use it as a gate.
 
 Scenarios: `baseline`, `timeout-after-commit`, `rate-limit`, `malformed-response`, `timeout-no-key`. The last one loses the reply on a service with no idempotency keys, so a retry pays twice and the safe outcome is to escalate.
 
@@ -141,9 +141,9 @@ These tests establish behavior for the supplied fixtures and failure model, not 
 - `src/cli.ts`: demo, regression command, and history.
 - `web/src/`: React dashboard and API client.
 - `site/`: public product page, deployable to Vercel as static files.
-- `infra/`: AWS setup as CDK code: a private network, RDS PostgreSQL, an SQS job queue, a Lambda worker and an API Gateway API.
+- `infra/`: AWS setup as CDK code: a private network, RDS PostgreSQL, an SQS job queue, a Lambda worker and an API Gateway API. GitHub Actions deploys it from `main`.
 - `tests/`: behavioral, database, and API tests.
-- `docs/ROADMAP.md`: next milestones and the intended AWS architecture.
+- `docs/ROADMAP.md`: what is done and what comes next.
 - `docs/STATUS.md`: what works, what isn't verified, and known gaps.
 
 ## License

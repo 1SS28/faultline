@@ -2,7 +2,7 @@
 
 Breaks an MCP server's tool calls on purpose, then asks the server what it really did. It sits between your agent and any MCP server that runs over stdio, so you can test a server you didn't write without changing its code.
 
-It is not on npm yet. Until it is, run `npm run build:mcp` from the repository root, or start it from source with `npx tsx packages/mcp/src/cli.ts`.
+It is not on npm yet. Until it is, start it from source in a clone of this repository, with `npx tsx packages/mcp/src/cli.ts` in place of `npx faultline-mcp-proxy`.
 
 ## What it does
 
@@ -45,7 +45,7 @@ Put the proxy in front of the server wherever your agent's MCP servers are confi
 
 `checks` ask the server what it holds. `trace` looks at what the agent did. Either is enough for a run to count as checked.
 
-Run your agent as usual. When it disconnects, the proxy prints the trace and the checks to stderr, writes the report file, and exits 1 if a check failed:
+Run your agent as usual. When it disconnects, the proxy prints the trace and the checks to stderr, writes the report file, and exits 1 if a check failed. It also exits 1 if nothing was checked and a planned fault never fired, or if the report couldn't be saved.
 
 ```
 FAILED
@@ -56,6 +56,8 @@ FAILED
   05  +234ms  create_note ran against the service
   06  +234ms  create_note returned
   ✗ "Buy milk" exists exactly once: 2 (expected 1)
+  ✗ Listed the notes before writing again: 1 of 1 repeat after a failure came with no read first (expected list_notes first)
+  ✓ Every planned fault fired
 ```
 
 For a quick try without a file, `--fault create_note:timeout-after-commit` breaks the first call, and `--fault create_note:timeout-after-commit@2,3` breaks the second and third.
@@ -64,7 +66,7 @@ For a quick try without a file, `--fault create_note:timeout-after-commit` break
 
 ## Faults
 
-Each fault names a tool and the call numbers it applies to, counting that tool's calls from 1. The default is the first call.
+Each fault names a tool and the call numbers it applies to, counting that tool's calls from 1. The default is the first call. Only one fault can apply to a call, so a plan with two on the same call is refused.
 
 | Kind | What the server does | What the agent sees |
 |---|---|---|
@@ -74,9 +76,11 @@ Each fault names a tool and the call numbers it applies to, counting that tool's
 | `malformed-response` | Runs the call | An empty result |
 | `planted-text` | Runs the call | The real result, with your `text` added to it |
 
-`planted-text` tests an agent that reads content someone else wrote. Give it the `text` to plant and, for a JSON result, the `field` to put it in, such as `"body"`: the text is added to the first string field of that name. Without a field, or when the result has none, it goes at the end. Then check that the agent didn't do what the text asked, with a trace check such as `{ "tool": "delete_note", "count": "calls", "max": 0 }`. The server's own data is never changed.
+`planted-text` tests an agent that reads content someone else wrote. Give it the `text` to plant and, for a JSON result, the `field` to put it in, such as `"body"`: the text is added to the first string field of that name, in the text and in the structured result if the tool returns one. The rest of the result is left exactly as the server wrote it. Without a field, or when the result has none, it goes at the end. Then check that the agent didn't do what the text asked, with a trace check such as `{ "tool": "delete_note", "count": "calls", "max": 0 }`. The server's own data is never changed.
 
 The timeout text is "Request timed out". Set `message` on a fault to use the wording your real stack produces. The text deliberately doesn't say that the outcome is unknown, because a real timeout doesn't either.
+
+A call the server itself refuses, with a result marked as an error, is passed to the agent as it is. No fault is spent on it and it isn't counted as a call that ran, because nothing was saved. The fault planned for that call is then reported as never fired.
 
 By default a failure arrives as a tool result with `isError: true`, which is how most servers report a failed upstream call. Set `"surface": "protocol-error"` to send a JSON-RPC error instead, as a client-side timeout would look.
 
@@ -86,6 +90,8 @@ A check calls one of the server's read tools, with the `args` you give, and coun
 
 Checks run against the real server with no faults, and they aren't part of the agent's trace. A session with no checks of either kind is reported as `UNCHECKED`, never as passed.
 
+A check only sees what its read tool returns. If the tool pages its results, ask for enough in `args` to cover everything the session could have created, or a second copy can sit on a page the check never read.
+
 ## Trace checks
 
 A trace check reads the proxy's own record of the session, so it needs no read tool and can catch behaviour that left the server in the right state by luck. Each one names a `tool`, and takes either `count` or `readBeforeRetry`.
@@ -94,8 +100,8 @@ A trace check reads the proxy's own record of the session, so it needs no read t
 |---|---|
 | `"count": "calls"` | How many times the agent called the tool |
 | `"count": "ran"` | How many of those calls reached the server. A write that ran twice is a duplicate, whether or not a read tool can show it |
-| `"count": "while-limited"` | Calls made while an injected rate limit was still in force. The call that set the limit off isn't counted |
-| `"readBeforeRetry": [tools]` | After a call to the tool fails, one of the listed tools has to return before the tool is called again. A read that failed or was itself faulted doesn't count |
+| `"count": "while-limited"` | Calls made while an injected rate limit was in force, after a rejection had already come back. The call that set the limit off isn't counted, and neither are calls made together with it |
+| `"readBeforeRetry": [tools]` | After a call to the tool fails, one of the listed tools has to return before the tool is called again. A read that failed, was itself faulted, or hadn't come back yet when the tool was called again doesn't count |
 
 `count` needs `min`, `max` or both. `where` narrows any trace check to calls whose arguments include the given values, for a tool that does several jobs:
 
@@ -121,13 +127,18 @@ A plan can list calls to make on the real server before the agent starts and aft
 }
 ```
 
-A step with `forEach` calls the read tool once, finds every distinct match of the pattern in what it returns, and runs the step for each. `{{match}}` in `args` becomes the first capture group, or the whole match if the pattern has none. An argument that is exactly `"{{match}}"` stays a number when the match is all digits, for tools that take numeric ids.
+A step with `forEach` calls the read tool once, finds every distinct match of the pattern in what it returns, and runs the step for each. `{{match}}` in `args` becomes the first capture group, or the whole match if the pattern has none. An argument that is exactly `"{{match}}"` becomes a number when the match is a whole number that fits one exactly, for tools that take numeric ids. A longer id, or one with leading zeros, is sent as text.
 
 A step that fails stops there. The proxy exits 2 if setup fails and 1 if cleanup fails, and says which tool it was.
 
 ## What stops a false pass
 
-Two things stop a run from passing for the wrong reason. The proxy refuses to start if a fault or check names a tool the server doesn't have. And if a planned fault never fired, because the agent never made that call, the run fails with "Every planned fault fired" even when the checks hold.
+A run that passes for the wrong reason is worse than one that fails, so the proxy refuses or fails these:
+
+- A plan with a field it doesn't know. A misspelled `faults` or `calls` would otherwise run as a plan with no fault.
+- A fault or check that names a tool the server doesn't have.
+- Two faults on the same call of a tool, since only one could fire.
+- A run whose planned fault never fired, because the agent never made that call or the server refused it. It fails with "Every planned fault fired" even when the checks hold.
 
 ## As a library
 

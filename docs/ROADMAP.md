@@ -1,39 +1,52 @@
 # Roadmap
 
-## 1. Working failure demonstration (done)
+Written 2026-11-23. `STATUS.md` says what works today. This says what comes next and why.
 
-Reproduce lost acknowledgement after commit; compare naive and idempotent retries. Add rate-limit and malformed-response scenarios. Persist traces and side effects in PostgreSQL. Make the CLI usable as a CI regression command.
+## Where it stands
 
-## 2. Developer-facing inspection (done)
+- The tool finds real failures. A Claude model refunded an order twice in 10 of 10 trials under a prompt meant to make it safer, and on GitHub's MCP server a dropped reply led to a duplicate issue in 9 of 10 trials.
+- Nobody outside this project uses it. The SDK is on npm, but the MCP proxy and the runner only work from a clone of this repository.
+- The engineering is ahead of the evidence that anyone wants it.
 
-The local React dashboard uses the existing API: scenario/agent selection, run history, a chronological trace, the service ledger, and failed assertion evidence. Keep fixture runs explicitly labeled. Prioritize the working surface over a marketing page.
+So the next few months go to two things in this order: results other people can check, and a tool they can install. New features come after those, and only where a real run asked for one.
 
-## 3. Real agent integration (adapters done, first live run done)
+## Now: through December
 
-Claude and OpenAI adapters and the repeated-trial CLI are implemented. The Claude adapter has run 91 live trials with `claude-sonnet-5-5`. It passed all 40 trials of the first four scenarios. On a refund tool with no idempotency key, the recovery prompt made it refund twice in 10 of 10 trials. The fixed prompt passed 30 of 30 across all five scenarios. See LIVE-EVALUATION.md. Next: other models and a first live OpenAI run. Preserve the same tool boundary and state-based assertions. Store model/version/configuration metadata. Run repeated trials and report sample counts and variance; do not present a single passing run as reliability proof.
+1. **Report what the tool has already found.** Send the search-lag finding to GitHub's MCP server with the saved evidence. A finding only counts once the maintainers have seen it.
+2. **Publish the proxy to npm.** SDK 0.2.0, which it depends on, is published. The proxy needs a package name that doesn't clash with the existing Faultline on npm.
+3. **Ship the runner as a command.** `npm run evaluate:mcp` lives in `src/` and needs this repository. It should be one installable command that takes a plan and a server.
+4. **Ship plans for well-known MCP servers.** The GitHub plans sit in an ignored folder. A `plans/` directory lets anyone repeat a published result with one command.
 
-Add an exported SDK and example agent owned by another developer. The validation milestone is discovering a real bug in that agent.
+## Next: January and February
 
-## 4. Durable execution (local queue done)
+5. **Remote MCP servers.** The proxy only speaks stdio. Many production servers are reached over HTTP, so this is the largest gap in what the tool can test.
+6. **A second model provider in the MCP runner.** It drives Claude models only. The OpenAI adapter exists for the refund scenarios and has never made a live call. Results on one provider invite the question of whether the failure is the model's or the tool's.
+7. **Failures that arrive late.** Today the failure reaches the agent the moment the write lands, which is the worst case for a read that lags. A delay option makes the test match a real timeout.
+8. **A stale-read fault.** GitHub's duplicate came from a search that was a few seconds behind. A fault that serves a read tool's previous result would reproduce that on any server, without depending on the server's own timing.
+9. **A survey of MCP servers.** Run the lost-reply plan against the most used servers that have write tools, and publish which ones protect against a repeated write. Most of it needs no model, so it is cheap, and it is the clearest demonstration of what the tool is for.
 
-API submission is separated from a durable SQL queue and subprocess fixture worker. Lease renewal, stale-writer fencing, bounded retries, crash recovery, and attempt history are implemented and tested locally. Additional production work: Model queued/running/completed/errored states, execution attempts, leases, deadlines, and worker-loss recovery. Make queue delivery idempotent. Keep every retry attempt's evidence; never confuse duplicate job delivery with agent behavior within a run.
+## Later: March and April
 
-Run agent code in restricted, disposable containers before accepting arbitrary code. Limit CPU, memory, wall time, and network access. Add authentication and tenant isolation before hosting.
+10. **One place for results.** Refund runs go to PostgreSQL and the dashboard. MCP evaluations go to JSON files, and SDK results go nowhere. Storing all three together gives MCP runs the regression query the refund runs already have.
+11. **A GitHub Action** that runs a plan on a pull request and fails it when a pass rate drops.
+12. **Checks that look up what a trial created**, by its id, and a clean state for every trial.
+13. **Decide what to do with the AWS build** before the free plan ends on 2027-05-04: tear it down, or pay for it because something uses it.
 
-## 5. AWS deployment
+## Not planned until someone asks
 
-Intended architecture, not deployed:
+- Hosting it for other people: sign-in, separate tenants, billing.
+- Running untrusted agent code in containers.
+- More fault types for the refund simulator. It is a demo now, and the MCP proxy is where real servers get tested.
 
-- API service on ECS/Fargate, behind an authenticated entry point.
-- SQS for run jobs and a dead-letter queue for repeated infrastructure errors.
-- Fargate workers for isolated execution.
-- RDS PostgreSQL for run metadata, structured evidence, and analytical queries.
-- S3 for large trace artifacts, referenced by run ID.
-- CloudWatch for logs/metrics, IAM task roles, Secrets Manager for credentials.
-- Infrastructure as code, TLS, private database networking, retention policies, and budget alerts.
+## How to tell it is working
 
-A low-cost development topology is being built in `infra/` with the AWS CDK. It uses Lambda instead of Fargate and skips the NAT gateway. The private network, RDS PostgreSQL 18, its Secrets Manager password, an SQS queue with a dead-letter queue, a Lambda worker that runs fixture trials into RDS, and an API Gateway API with API keys that queues trials and reads results are deployed in us-east-2. CloudWatch alarms on dead letters, worker errors, API errors and queue backlog notify an SNS topic, and `GET /regressions` serves a window-function query that flags agent versions whose pass rate dropped. Both are deployed. CI checks and synthesizes the stack on every push. Deploys are manual because the account's AWS-managed organization blocks the identity provider that GitHub OIDC needs. Container execution is not verified.
+- A maintainer fixes something this tool reported.
+- Someone outside the project runs it on their own agent or server and says what happened.
+- A published result is repeated by someone else from the shipped plans.
 
-## Validation
+None of these has happened yet. Pricing and willingness to pay are untested.
 
-Ask five engineers shipping agents for their last tool-execution failure. Test whether lost acknowledgements, rate limits, and malformed responses recur in their workflows. Success means an external team installs the adapter, finds a previously unknown failure, and reruns the test after fixing it. Pricing and willingness to pay remain unvalidated.
+## Upkeep
+
+- The Anthropic SDK is at 0.135 and 1.x is out. Upgrade before the next round of live runs.
+- The price table in `src/evaluation/mcp.ts` is dated 2026-11-03. Check it before trusting a cost limit on a new model.

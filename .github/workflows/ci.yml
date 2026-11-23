@@ -16,6 +16,13 @@ jobs:
       - run: npm run build:site
       - run: npm run build:sdk
       - run: npm run build:mcp
+      # the two packages as npm would ship them: packed, installed somewhere empty, and started
+      - name: Install and start the packaged proxy
+        run: |
+          mkdir "$RUNNER_TEMP/consumer" && cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install "$(npm pack --silent "$GITHUB_WORKSPACE/packages/sdk")" "$(npm pack --silent "$GITHUB_WORKSPACE/packages/mcp")"
+          npx faultline-mcp-proxy --help
       - run: npm test
       - run: npm run demo
       - run: npm run faultline -- run timeout-after-commit resilient

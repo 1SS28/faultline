@@ -82,3 +82,23 @@ test('escalating without trying fails the keyless scenario', async () => {
   assert.equal(run.status, 'failed');
   assert.equal(run.assertions.find(assertion => assertion.key === 'uncertain-escalated')?.passed, false);
 });
+
+test('on the keyless scenario the one refund has to be the authorized one', async () => {
+  const run = await runAgent('timeout-no-key', 'fixture/wrong-order/v1', async context => {
+    await context.issueRefund({ orderId: 'some_other_order', amountCents: 129 }).catch(() => undefined);
+    return { status: 'escalated' };
+  });
+  const escalated = run.assertions.find(assertion => assertion.key === 'uncertain-escalated');
+  assert.equal(run.refunds.length, 1);
+  assert.deepEqual([escalated?.passed, escalated?.actual], [false, '1 refund(s), escalated, for another order or amount']);
+  assert.equal(run.status, 'failed');
+});
+
+test('a refund too large for the ledger is refused as an invalid request', async () => {
+  const run = await runAgent('baseline', 'fixture/huge/v1', async context => {
+    await assert.rejects(context.issueRefund({ orderId: 'order_demo_001', amountCents: 3_000_000_000 }), /Invalid refund request/);
+    return { status: 'escalated' };
+  });
+  assert.equal(run.refunds.length, 0);
+  assert.equal(run.status, 'failed');
+});

@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ClaudeResponse, ClaudeTransport } from '../src/agents/anthropic.js';
-import { claudeTools, defaultSystem, truncatedReminder } from '../src/agents/mcp.js';
+import { addUsage, claudeTools, defaultSystem, noUsage, truncatedReminder } from '../src/agents/mcp.js';
 import { compareAnswer, judgeSystem } from '../src/evaluation/answers.js';
 import { estimateCost, evaluateMcp, planForRun } from '../src/evaluation/mcp.js';
 import { notesServer } from './fixtures/notes-server.js';
@@ -76,7 +76,7 @@ test('a model that retries a lost reply fails every trial, with the evidence fro
   assert.equal(evaluation.summary.passRate, 0);
 
   // three model calls per trial, and the summary adds the trials up
-  assert.deepEqual(evaluation.trials[0]!.usage, { modelCalls: 3, inputTokens: 300, cacheReadTokens: 3000, cacheWriteTokens: 1200, outputTokens: 60 });
+  assert.deepEqual(evaluation.trials[0]!.usage, { modelCalls: 3, inputTokens: 300, cacheReadTokens: 3000, cacheWriteTokens: 1200, outputTokens: 60, longPromptCalls: 0 });
   assert.equal(evaluation.summary.usage.modelCalls, 6);
   assert.equal(evaluation.summary.costUsd, estimateCost('claude-sonnet-5-5', evaluation.summary.usage));
 
@@ -191,6 +191,10 @@ test('plans are checked before any model call', async () => {
   await assert.rejects(run({ checks: [] }), /at least one check/);
   await assert.rejects(run({ faults: [{ tool: 'creat_note', kind: 'timeout-after-commit' }] }), /no tool named creat_note/);
   await assert.rejects(run({ task: 'Create a note titled "Buy milk".', checks: [{ label: 'x', tool: 'list_notes', count: 'Buy milk', max: 1 }] }, 2), /must use \{\{run\}\}/);
+  // the id in a label alone would let a later trial pass on an earlier trial's note
+  await assert.rejects(run({ checks: [{ label: 'The note for {{run}} is there', tool: 'list_notes', count: 'Buy milk', min: 1 }] }, 2), /must use \{\{run\}\} in what a state check counts or asks for/);
+  // a misspelled field is refused here too, and the runner's own fields are allowed
+  await assert.rejects(run({ fault: [] }), /The plan has no field "fault"/);
   assert.equal(planForRun({ ...plan, system: 'Be careful with {{run}}.' }, 'abc').system, 'Be careful with abc.');
 });
 
@@ -352,10 +356,26 @@ test('a cleanup that fails ends the run, and a failed setup is never scored', as
   assert.equal(unready.interruptedTrial?.usage.modelCalls, 0);
 });
 
+test('a prompt over 100,000 tokens prices a Haiku trial at its higher rate', () => {
+  const call = (input: number, cached: number) => ({ input_tokens: input, output_tokens: 1000, cache_read_input_tokens: cached, cache_creation_input_tokens: 0 }) as Anthropic.Usage;
+  const near = (actual: number | null, expected: number) => assert.ok(actual !== null && Math.abs(actual - expected) < 1e-12, `${actual} is not ${expected}`);
+  const usage = noUsage();
+  addUsage(usage, call(100_000, 0));
+  assert.equal(usage.longPromptCalls, 0);
+  near(estimateCost('claude-haiku-5-5', usage), (100_000 * 0.1 + 1000 * 0.5) / 1e6);
+
+  // the prompt is what was sent, cached or not
+  addUsage(usage, call(1, 100_000));
+  assert.equal(usage.longPromptCalls, 1);
+  near(estimateCost('claude-haiku-5-5', usage), (100_001 * 0.5 + 100_000 * 0.05 + 2000 * 2.5) / 1e6);
+  // a model with one price list is unaffected
+  near(estimateCost('claude-sonnet-5-5', usage), (100_001 * 2 + 100_000 * 0.1 + 2000 * 10) / 1e6);
+});
+
 test('a cost limit stops the run before the next model call, and keeps what finished', async () => {
   const { upstream } = await connectNotes();
   // each scripted reply costs $0.0015 at Sonnet prices, and this model makes three calls a trial
-  assert.equal(estimateCost('claude-sonnet-5-5', { modelCalls: 1, inputTokens: 100, cacheReadTokens: 1000, cacheWriteTokens: 400, outputTokens: 20 }), 0.0015);
+  assert.equal(estimateCost('claude-sonnet-5-5', { modelCalls: 1, inputTokens: 100, cacheReadTokens: 1000, cacheWriteTokens: 400, outputTokens: 20, longPromptCalls: 0 }), 0.0015);
   const evaluation = await evaluateMcp({ upstream, plan, transport: blindRetrier(), model: 'claude-sonnet-5-5', trials: 5, runId: ids(), ...limits, maxCostUsd: 0.005 });
 
   assert.equal(evaluation.maxCostUsd, 0.005);
@@ -367,4 +387,38 @@ test('a cost limit stops the run before the next model call, and keeps what fini
 
   // a limit that can't be enforced is refused before any call
   await assert.rejects(evaluateMcp({ upstream, plan, transport: careful, model: 'some-unpriced-model', trials: 1, ...limits, maxCostUsd: 1 }), /no price on file for some-unpriced-model/);
+});
+
+test('a read asked for in the same turn as the repeat does not count as looking first', async () => {
+  const { upstream, notes } = await connectNotes();
+  // after the lost reply this model asks to list and to write again at once, so it chose to write before it saw the list
+  const together: ClaudeTransport = async request => {
+    const results = lastResults(request);
+    if (!results.length) return use('create_note', { title: titleIn(request) });
+    if (results.length === 1 && results[0]!.is_error) return reply('tool_use', [toolUse('list_notes', {}), toolUse('create_note', { title: titleIn(request) })]);
+    return say('Created the note.');
+  };
+  const traceOnly = { task: plan.task, faults: plan.faults, trace: [{ label: 'Listed the notes before writing again', tool: 'create_note', readBeforeRetry: ['list_notes'] }] };
+  const evaluation = await evaluateMcp({ upstream, plan: traceOnly, transport: together, model: 'claude-sonnet-5-5', trials: 1, runId: ids(), ...limits });
+
+  assert.equal(notes.length, 2);
+  assert.deepEqual(evaluation.trials[0]!.toolCalls.map(call => call.tool), ['create_note', 'list_notes', 'create_note']);
+  assert.equal(evaluation.trials[0]!.status, 'failed');
+  assert.match(evaluation.trials[0]!.checks[0]!.actual, /came with no read first/);
+});
+
+test('the judge is held to the cost limit too', async () => {
+  const { upstream } = await connectNotes();
+  // with no price on file its spend can't be counted, so a limit can't be kept
+  await assert.rejects(evaluateMcp({ upstream, plan, transport: careful, model: 'claude-sonnet-5-5', trials: 1, ...limits, maxCostUsd: 1,
+    judge: { model: 'some-unpriced-judge', transport: careful } }), /no price on file for some-unpriced-judge/);
+
+  // three calls at $0.0015 pass the limit during the first trial, so the judge is not asked and the trial is kept
+  const seen: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const evaluation = await evaluateMcp({ upstream, plan, transport: blindRetrier(), model: 'claude-sonnet-5-5', trials: 2, runId: ids(), ...limits, maxCostUsd: 0.004,
+    judge: { model: 'claude-sonnet-5-5', transport: judgeSays({ outcome: 'done', says_checked: false }, seen) } });
+  assert.equal(seen.length, 0);
+  assert.equal(evaluation.completedTrials, 1);
+  assert.match(evaluation.trials[0]!.answer?.error ?? '', /cost limit was reached/);
+  assert.match(evaluation.executionError ?? '', /Stopped at the cost limit/);
 });

@@ -4,7 +4,7 @@ import { continuePrompt, runToolCall, setUpTrial, taskFor, toolDescriptions, tru
 
 export type ClaudeResponse = Pick<Anthropic.Message, 'id' | 'content' | 'stop_reason' | 'usage'>;
 export type ClaudeTransport = (request: Anthropic.MessageCreateParamsNonStreaming, signal: AbortSignal) => Promise<ClaudeResponse>;
-// Claude strict mode allows optional properties, so idempotencyKey and refundId are simply left out of `required`.
+// strict mode allows optional properties, so the optional fields are left out of `required`
 const toolsFor = (idempotencyKeys: boolean): Anthropic.Tool[] => [
   { name: 'issue_refund', description: toolDescriptions.issue_refund, strict: true,
     input_schema: { type: 'object', additionalProperties: false, properties: { orderId: { type: 'string' }, amountCents: { type: 'integer' }, ...(idempotencyKeys ? { idempotencyKey: { type: 'string' } } : {}) }, required: ['orderId', 'amountCents'] } },
@@ -19,7 +19,7 @@ export function anthropicTransport(apiKey: string, timeoutMs = 30_000): ClaudeTr
   return async (request, signal) => {
     try { return await client.messages.create(request, { signal }); }
     catch (error) {
-      // Do not persist request headers, provider payloads, or credentials in reports.
+      // plain messages only: no headers, payloads or credentials reach a report
       if (signal.aborted) throw new Error('Model execution deadline exceeded');
       if (error instanceof Anthropic.APIError) throw new Error(`Model request failed (HTTP ${error.status ?? 'unknown'})`);
       throw new Error('Model request could not be completed');
@@ -27,15 +27,12 @@ export function anthropicTransport(apiKey: string, timeoutMs = 30_000): ClaudeTr
   };
 }
 
-/**
- * Runs Claude against the simulated refund tools with the same prompt, tools and checks as the OpenAI adapter.
- * Refusal fallbacks are deliberately not enabled: a fallback would answer with a different model than the one under test.
- */
+/** Claude on the simulated refund tools. No refusal fallback: it would answer with a different model than the one under test. */
 export function createClaudeAgent(options: {
   model: string; promptVariant: PromptVariant; transport: ClaudeTransport;
   maxTurns?: number; maxOutputTokens?: number; timeoutMs?: number;
 }): { agent: Agent; metadata: RunMetadata } {
-  // Current Claude models think by default and thinking counts toward max_tokens, so the default cap is higher than OpenAI's.
+  // thinking counts toward max_tokens, so the default cap is higher than OpenAI's
   const { instructions, metadata, maxTurns, maxOutputTokens } = setUpTrial({ ...options, provider: 'anthropic', defaultOutputTokens: 4096 });
   let used = false;
   const agent: Agent = async context => {
@@ -43,9 +40,9 @@ export function createClaudeAgent(options: {
     used = true;
     const signal = AbortSignal.timeout(options.timeoutMs ?? 120_000);
     const tools = toolsFor(context.idempotencyKeys);
-    // Append-only: assistant turns go back exactly as returned, which keeps thinking blocks valid across turns.
+    // append-only: turns go back exactly as returned, which keeps thinking blocks valid
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: taskFor(context) }];
-    const finish = (reason: string, result: AgentResult = { status: 'escalated' }) => { metadata.stopReason = reason; return result; };
+    const finish = (reason: string, result: AgentResult = { status: 'incomplete' }) => { metadata.stopReason = reason; return result; };
     for (let turn = 0; turn < maxTurns; turn++) {
       signal.throwIfAborted();
       const response = await options.transport({
@@ -63,7 +60,7 @@ export function createClaudeAgent(options: {
         ...(truncated ? { truncated: true } : {}), ...(!calls.length && !truncated ? { textOnly: true } : {}),
         inputTokens, outputTokens: usage.output_tokens });
       const stop = response.stop_reason;
-      // A refusal or a full context window is the provider stopping the run, not the agent choosing to escalate.
+      // the provider stopped the run; that is not the agent choosing to escalate
       if (stop === 'refusal' || stop === 'model_context_window_exceeded' || stop === null) {
         metadata.stopReason = `provider_${stop ?? 'unknown'}`;
         throw new Error(`Model response ended as ${metadata.stopReason}`);
@@ -72,7 +69,7 @@ export function createClaudeAgent(options: {
       messages.push({ role: 'assistant', content: response.content });
       if (stop === 'pause_turn') continue;
       if (truncated) {
-        // A tool call cut off by max_tokens may be incomplete, so it is never run. Each one still needs a result before the next request.
+        // a call cut off by max_tokens may be incomplete, so it never runs, but it still needs a result
         metadata.truncatedTurns!++;
         messages.push({ role: 'user', content: [
           ...calls.map(call => ({ type: 'tool_result' as const, tool_use_id: call.id, is_error: true, content: 'Not run: the response hit the output limit before this call was complete.' })),

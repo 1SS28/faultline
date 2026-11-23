@@ -34,10 +34,13 @@ async function readPlan(): Promise<{ plan: Plan; report?: string; command: strin
   if (values.help) return undefined;
   const [command, ...args] = positionals;
   if (!command) throw new Error('Give the server command after "--"');
-  const fromFile: Record<string, unknown> = values.config ? JSON.parse(await readFile(values.config, 'utf8')) : {};
-  const plan = parsePlan({ ...fromFile, ...(values.surface && { surface: values.surface }) });
-  plan.faults.push(...(values.fault ?? []).map(parseFaultFlag));
-  return { plan, report: values.report ?? (typeof fromFile.report === 'string' ? fromFile.report : undefined), command, args };
+  const file: unknown = values.config ? JSON.parse(await readFile(values.config, 'utf8')) : {};
+  // "task" and "system" belong to the runner, which shares this file format
+  const fromFile = parsePlan(file, ['report', 'task', 'system']);
+  // parsed again with the flags added, so a flag that collides with a fault in the file is refused
+  const plan = parsePlan({ ...fromFile, faults: [...fromFile.faults, ...(values.fault ?? []).map(parseFaultFlag)], ...(values.surface && { surface: values.surface }) });
+  const inFile = (file as { report?: unknown }).report;
+  return { plan, report: values.report ?? (typeof inFile === 'string' ? inFile : undefined), command, args };
 }
 
 let input: Awaited<ReturnType<typeof readPlan>>;
@@ -80,11 +83,20 @@ const finish = () => finishing ??= (async () => {
   for (const check of plan.trace) proxy.checkTrace(check);
   const report = proxy.report();
   say(formatReport(report));
-  if (report.status === 'unchecked' && proxy.unusedFaults().length) say(`Never reached: ${proxy.unusedFaults().join(', ')}`);
+  // nothing was checked and a fault never fired: the session tested nothing, which must not look like success
+  const untested = report.status === 'unchecked' && proxy.unusedFaults().length > 0;
+  if (untested) say(`Never reached: ${proxy.unusedFaults().join(', ')}`);
+  let saved = true;
   if (reportPath) {
-    await mkdir(dirname(reportPath), { recursive: true });
-    await writeFile(reportPath, JSON.stringify({ server: [command, ...args].join(' '), faults: plan.faults, ...report }, null, 2));
-    say(`Saved report: ${reportPath}`);
+    try {
+      await mkdir(dirname(reportPath), { recursive: true });
+      await writeFile(reportPath, JSON.stringify({ server: [command, ...args].join(' '), faults: plan.faults, ...report }, null, 2));
+      say(`Saved report: ${reportPath}`);
+    } catch (error) {
+      // the cleanup below still has to run, or the test data stays on the server
+      saved = false;
+      say(`Could not save the report to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   let cleaned = true;
   try {
@@ -95,7 +107,7 @@ const finish = () => finishing ??= (async () => {
     say(`Cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   await upstream.close().catch(() => undefined);
-  process.exit(report.status === 'failed' || !cleaned ? 1 : 0);
+  process.exit(report.status === 'failed' || untested || !saved || !cleaned ? 1 : 0);
 })();
 
 upstream.onclose = () => {

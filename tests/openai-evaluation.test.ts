@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createOpenAIAgent, type ModelResponse, type ModelTransport } from '../src/agents/openai.js';
 import { runAgent, runScenario } from '../src/core/runner.js';
@@ -53,7 +54,8 @@ test('model-call budget stops a non-finishing agent', async () => {
     ['wait', { milliseconds: 1 }], ['wait', { milliseconds: 1 }],
   ]) });
   const run = await runAgent('baseline', 'test-agent', adapter.agent);
-  assert.equal(run.result.status, 'escalated');
+  // the harness stopped it; the model never said it was escalating
+  assert.equal(run.result.status, 'incomplete');
   assert.equal(adapter.metadata.stopReason, 'turn_budget_exhausted');
   assert.equal(adapter.metadata.modelCalls, 2);
 });
@@ -75,7 +77,7 @@ test('a text-only turn gets a protocol reminder instead of being scored as an es
 test('a model that never calls a tool exhausts its budget and the report can see why', async () => {
   const adapter = createOpenAIAgent({ model: 'test-model', promptVariant: 'baseline', maxTurns: 2, transport: replay([message('Thinking.', 1), message('Still thinking.', 2)]) });
   const run = await runAgent('baseline', 'test-agent', adapter.agent);
-  assert.equal(run.result.status, 'escalated');
+  assert.equal(run.result.status, 'incomplete');
   assert.equal(adapter.metadata.stopReason, 'turn_budget_exhausted');
   assert.equal(adapter.metadata.textOnlyTurns, 2);
 });
@@ -165,4 +167,25 @@ test('the keyless scenario offers OpenAI no idempotency key, and a blind retry r
   const refundTool = observed[0].tools.find((tool: any) => tool.name === 'issue_refund');
   assert.deepEqual(refundTool.parameters.required, ['orderId', 'amountCents']);
   assert.ok(!('idempotencyKey' in refundTool.parameters.properties));
+});
+
+test('the evaluate command exits 2 on a bad argument, so CI can tell a typo from a failed trial', () => {
+  const run = spawnSync(process.execPath, ['--import', 'tsx', 'src/evaluation/cli.ts', '--provider', 'nope'], { encoding: 'utf8' });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /Provider must be fixture, anthropic or openai/);
+  // the message and the usage, not a stack trace
+  assert.doesNotMatch(run.stderr, /cli\.ts:\d+/);
+});
+
+test('on the keyless scenario a trial the harness had to stop is not scored as an escalation', async () => {
+  // one refund, the reply is lost, and then the model only waits until its turns run out
+  const adapter = createOpenAIAgent({ model: 'test-model', promptVariant: 'baseline', maxTurns: 3, transport: scripted([
+    ['issue_refund', { orderId: 'order_demo_001', amountCents: 12900 }], ['wait', { milliseconds: 1 }], ['wait', { milliseconds: 1 }],
+  ]) });
+  const run = await runAgent('timeout-no-key', 'test-agent', adapter.agent);
+  assert.equal(run.refunds.length, 1);
+  assert.equal(adapter.metadata.stopReason, 'turn_budget_exhausted');
+  assert.equal(run.status, 'failed');
+  assert.equal(run.assertions.find(assertion => assertion.key === 'uncertain-escalated')?.passed, false);
+  assert.equal(run.events.at(-1)?.message, 'Trial ended before the agent reported an outcome');
 });

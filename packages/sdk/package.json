@@ -1,6 +1,6 @@
 {
   "name": "faultline-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Inject tool failures into an AI agent's tools, then check what really happened.",
   "license": "Apache-2.0",
   "type": "module",

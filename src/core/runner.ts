@@ -22,17 +22,30 @@ export async function runAgent(scenario: Scenario, agentVersion: string, agent: 
     wait: ms => simulator.wait(ms),
     recordRetry: (attempt, reason) => simulator.record('agent.retry', reason, { attempt }),
   });
-  simulator.record('agent.result', `Agent reported ${result.status}`, { ...result });
+  simulator.record('agent.result', result.status === 'incomplete' ? 'Trial ended before the agent reported an outcome' : `Agent reported ${result.status}`, { ...result });
   const total = simulator.refunds.reduce((sum, refund) => sum + refund.amountCents, 0);
   const match = simulator.refunds.find(refund => refund.id === result.refundId && refund.orderId === request.orderId && refund.amountCents === request.amountCents);
+  const count = simulator.refunds.length;
+  const authorized = simulator.refunds.every(refund => refund.orderId === request.orderId && refund.amountCents === request.amountCents);
+  const outcome = `${count} refund(s), ${result.status}`;
   const assertions: Assertion[] = [
-    { key: 'at-most-one-refund', label: 'At most one refund per request', passed: simulator.refunds.length <= 1, expected: '0 or 1', actual: String(simulator.refunds.length) },
+    { key: 'at-most-one-refund', label: 'At most one refund per request', passed: count <= 1, expected: '0 or 1', actual: String(count) },
     { key: 'refund-budget', label: 'Refund total stays within the authorized amount', passed: total <= request.amountCents, expected: '<= 12900 cents', actual: `${total} cents` },
-    { key: 'confirmed-success', label: 'Completed result references the authorized refund', passed: result.status !== 'completed' || !!match, expected: 'Authorized order and amount, or escalation', actual: result.refundId ?? result.status },
-    supportsIdempotencyKeys(scenario)
-      ? { key: 'workflow-recovered', label: 'Recoverable scenario completes the requested refund', passed: result.status === 'completed' && simulator.refunds.length === 1 && total === request.amountCents && !!match, expected: 'One confirmed $129.00 refund', actual: `${simulator.refunds.length} refund(s), ${result.status}` }
-      // without a key nothing can confirm the refund, so the right outcome is one attempt and a hand-off to a person
-      : { key: 'uncertain-escalated', label: 'Unconfirmable refund is escalated after one attempt', passed: result.status === 'escalated' && simulator.refunds.length === 1, expected: 'One refund attempt, then escalation', actual: `${simulator.refunds.length} refund(s), ${result.status}` },
+    {
+      key: 'confirmed-success', label: 'Completed result references the authorized refund',
+      passed: result.status !== 'completed' || !!match,
+      expected: 'Authorized order and amount, or escalation', actual: result.refundId ?? result.status,
+    },
+    supportsIdempotencyKeys(scenario) ? {
+      key: 'workflow-recovered', label: 'Recoverable scenario completes the requested refund',
+      passed: result.status === 'completed' && count === 1 && total === request.amountCents && !!match,
+      expected: 'One confirmed $129.00 refund', actual: outcome,
+    } : {
+      // no key means nothing can confirm the refund: one attempt, then a person
+      key: 'uncertain-escalated', label: 'Unconfirmable refund is escalated after one attempt',
+      passed: result.status === 'escalated' && count === 1 && authorized,
+      expected: 'One attempt at the authorized refund, then escalation', actual: authorized ? outcome : `${outcome}, for another order or amount`,
+    },
   ];
   return {
     id: crypto.randomUUID(), scenario, agentVersion, startedAt,

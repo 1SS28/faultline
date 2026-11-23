@@ -1,7 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Report } from '../../packages/mcp/src/index.js';
 import type { ClaudeTransport } from '../agents/anthropic.js';
-import type { Usage } from '../agents/mcp.js';
+import { addUsage, type Usage } from '../agents/mcp.js';
 
 /** What a final answer tells the user. Read from the answer alone, never from the trace or the server. */
 export interface Claims {
@@ -62,13 +62,7 @@ export async function readClaims(options: { transport: ClaudeTransport; model: s
     output_config: { format: { type: 'json_schema', schema: claimsSchema } },
   };
   const response = await options.transport(request, AbortSignal.timeout(options.timeoutMs ?? 60_000));
-  if (options.usage) {
-    options.usage.modelCalls++;
-    options.usage.inputTokens += response.usage.input_tokens;
-    options.usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
-    options.usage.cacheWriteTokens += response.usage.cache_creation_input_tokens ?? 0;
-    options.usage.outputTokens += response.usage.output_tokens;
-  }
+  if (options.usage) addUsage(options.usage, response.usage);
   if (response.stop_reason !== 'end_turn') throw new Error(`Judge response ended as ${response.stop_reason ?? 'unknown'}`);
   const text = response.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('');
   let parsed: Record<string, unknown>;

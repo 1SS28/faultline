@@ -6,18 +6,22 @@ import { defaultSystem, noUsage, runModelThroughProxy, type ModelRun, type Usage
 import { readAfterFault, reviewAnswer, type AnswerReview, type Finding } from './answers.js';
 import { wilson95 } from './report.js';
 
-// $ per million tokens (claude-api skill table, cached 2026-11-03). Haiku's cache-read price is assumed at 0.1x input.
-const prices: Record<string, { input: number; output: number; cacheRead: number }> = {
+interface Rate { input: number; output: number; cacheRead: number }
+// $ per million tokens (claude-api skill, cached 2026-11-03)
+const prices: Record<string, Rate & { longPrompt?: Rate }> = {
   'claude-fable-5-2': { input: 8, output: 40, cacheRead: 0.2 },
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2 },
   'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.1 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  // haiku bills a call whose prompt passes 100,000 tokens at five times the price
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, longPrompt: { input: 0.5, output: 2.5, cacheRead: 0.05 } },
 };
 /** An estimate from published prices, or null for a model with no price on file. Five-minute cache writes cost 1.25x input. */
 export function estimateCost(model: string, usage: Usage): number | null {
   const price = prices[model];
   if (!price) return null;
-  return (usage.inputTokens * price.input + usage.cacheWriteTokens * price.input * 1.25 + usage.cacheReadTokens * price.cacheRead + usage.outputTokens * price.output) / 1e6;
+  // one long prompt prices the whole total at the higher rate: prompts only grow within a trial, and a limit should err high
+  const rate = usage.longPromptCalls ? price.longPrompt ?? price : price;
+  return (usage.inputTokens * rate.input + usage.cacheWriteTokens * rate.input * 1.25 + usage.cacheReadTokens * rate.cacheRead + usage.outputTokens * rate.output) / 1e6;
 }
 
 const placeholder = '{{run}}';
@@ -30,7 +34,7 @@ export function planForRun(raw: unknown, runId: string): { task: string; system:
   const { task, system = defaultSystem } = filled as Record<string, unknown>;
   if (typeof task !== 'string' || !task.trim()) throw new Error('The plan needs a "task": what to ask the model to do');
   if (typeof system !== 'string' || !system.trim()) throw new Error('"system" must be text');
-  const plan = parsePlan(filled);
+  const plan = parsePlan(filled, ['task', 'system']);
   // the SDK's rule: a test with no checks proves nothing
   if (!plan.checks.length && !plan.trace.length) throw new Error('The plan needs at least one check, on the server\'s state or on the trace');
   return { task, system, plan };
@@ -51,7 +55,7 @@ export interface McpEvaluation {
   model: string;
   /** The task as the plan wrote it, with `{{run}}` still in place. */
   task: string;
-  /** Ends in a hash of the system prompt, the server's instructions, the task and the tool definitions, so a change to any of them is a new version. */
+  /** Ends in a hash of everything the model saw: system prompt, server instructions, task and tool definitions. */
   agentVersion: string;
   server: string | null;
   /** The server's own guidance as the model saw it, or null if it has none or it was left out. */
@@ -67,7 +71,7 @@ export interface McpEvaluation {
     confidence95: ReturnType<typeof wilson95> | null;
     stopReasons: Record<string, number>;
     usage: Usage; costUsd: number | null;
-    /** Counts of answers that disagreed with what happened. The judge's own calls are costed here, apart from the model under test. */
+    /** Answers that disagreed with what happened. The judge's calls are costed here, apart from the model under test. */
     answers: { judge: string; reviewed: number; unreviewed: number; findings: Record<Finding, number>; usage: Usage; costUsd: number | null } | null;
   };
   trials: TrialRecord[];
@@ -89,8 +93,13 @@ export async function evaluateMcp(options: {
 }): Promise<McpEvaluation> {
   const { upstream, model, trials } = options;
   const template = planForRun(options.plan, placeholder);
-  if (trials > 1 && !JSON.stringify(options.plan).includes(placeholder)) {
-    throw new Error(`With more than one trial the plan must use ${placeholder} in its task and checks. The server keeps what earlier trials wrote, so later trials would count their leftovers.`);
+  if (trials > 1) {
+    const uses = (value: unknown) => JSON.stringify(value ?? null).includes(placeholder);
+    const { checks, trace, faults, setup, cleanup } = template.plan;
+    // a label doesn't count: what a check counts has to differ from trial to trial
+    const perTrial = checks.length ? checks.some(check => uses(check.count) || uses(check.args))
+      : uses(template.task) || uses(faults) || uses(setup) || uses(cleanup) || uses(trace.map(check => check.where));
+    if (!perTrial) throw new Error(`With more than one trial the plan must use ${placeholder} in ${checks.length ? 'what a state check counts or asks for' : 'its task'}. The server keeps what earlier trials wrote, so a later trial could pass on their leftovers.`);
   }
   const listed = await createFaultProxy({ upstream }).listTools();
   const tools = listed.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
@@ -106,7 +115,8 @@ export async function evaluateMcp(options: {
   const guidance = options.serverInstructions === false ? null : upstream.getInstructions()?.trim() || null;
   const withGuidance = (system: string) => guidance ? `${system}\n\nInstructions from the ${server?.name ?? 'MCP'} server:\n${guidance}` : system;
   // an estimate needs a price, and a limit that can't be enforced would be worse than none
-  if (options.maxCostUsd !== undefined && estimateCost(model, noUsage()) === null) throw new Error(`There is no price on file for ${model}, so a cost limit can't be enforced`);
+  const unpriced = [model, ...(options.judge ? [options.judge.model] : [])].find(name => estimateCost(name, noUsage()) === null);
+  if (options.maxCostUsd !== undefined && unpriced) throw new Error(`There is no price on file for ${unpriced}, so a cost limit can't be enforced`);
   const hash = createHash('sha256').update(withGuidance(template.system)).update(template.task).update(JSON.stringify(tools)).digest('hex');
   const records: TrialRecord[] = [];
   let executionError: string | null = null;
@@ -132,8 +142,10 @@ export async function evaluateMcp(options: {
       const report = proxy.report();
       // state checks are recorded first, ahead of trace checks and the fault check
       const stateOk = plan.checks.length ? report.checks.slice(0, plan.checks.length).every(check => check.passed) : null;
-      const answer = options.judge ? await reviewAnswer({ ...options.judge, task, answer: run.finalText, usage: judgeUsage,
-        evidence: { stateOk, readAfterFault: readAfterFault(report.events, readOnly) } }) : null;
+      // the judge is paid for too, so it isn't asked once the limit has been reached
+      const answer = !options.judge ? null
+        : options.maxCostUsd !== undefined && spent() >= options.maxCostUsd ? { claims: null, findings: [], error: 'Not reviewed: the cost limit was reached first' }
+        : await reviewAnswer({ ...options.judge, task, answer: run.finalText, usage: judgeUsage, evidence: { stateOk, readAfterFault: readAfterFault(report.events, readOnly) } });
       const record: TrialRecord = { trial, runId, status: report.status, ...run, checks: report.checks, events: report.events, usage, costUsd: estimateCost(model, usage), answer };
       records.push(record);
       options.onTrial?.(record);
@@ -153,6 +165,9 @@ export async function evaluateMcp(options: {
     for (const key of Object.keys(sum) as Array<keyof Usage>) sum[key] += record.usage[key];
     return sum;
   }, { ...(interruptedTrial?.usage ?? noUsage()) });
+  // trial by trial, so one trial on the higher rate doesn't reprice the rest
+  const costUsd = estimateCost(model, noUsage()) === null ? null
+    : records.reduce((sum, record) => sum + (record.costUsd ?? 0), 0) + (interruptedTrial ? estimateCost(model, interruptedTrial.usage) ?? 0 : 0);
   const reviews = records.flatMap(record => record.answer ? [record.answer] : []);
   const count = (finding: Finding) => reviews.filter(review => review.findings.includes(finding)).length;
   const answers = options.judge ? {
@@ -167,7 +182,7 @@ export async function evaluateMcp(options: {
       trials: records.length, passed, passRate: records.length ? Math.round(passed / records.length * 10000) / 100 : null,
       confidence95: records.length ? wilson95(passed, records.length) : null,
       stopReasons: records.reduce<Record<string, number>>((counts, record) => { counts[record.stopReason] = (counts[record.stopReason] ?? 0) + 1; return counts; }, {}),
-      usage: total, costUsd: estimateCost(model, total), answers,
+      usage: total, costUsd, answers,
     },
     trials: records,
   };

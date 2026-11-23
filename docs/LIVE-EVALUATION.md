@@ -48,11 +48,13 @@ Any other stop the provider makes, such as a failure, a content filter, a Claude
 
 Each run records a `stopReason`:
 
-- `finish_tool`: the model reported its own outcome.
+- `finish_tool`: the model reported its own outcome, `completed` or `escalated`.
 - `turn_budget_exhausted`: the model never called `finish`. Check `textOnlyTurns` and `truncatedTurns` to see whether it was stuck talking or getting cut off.
 - `tool_budget_exhausted`: the model kept calling `issue_refund` after the service stopped accepting calls. The trial stops there instead of spending the remaining turns.
 - `unexpected_parallel_tools`: the model returned several tool calls although parallel calls are disabled.
 - `provider_<reason>`: the provider stopped the response. Only appears in `interruptedTrial.metadata`, since the trial is aborted.
+
+When the harness ends a trial, which is every reason above except `finish_tool`, the result's status is `incomplete`. No scenario counts that as a pass. Before 2026-11-23 it was recorded as `escalated`, which `timeout-no-key` could score as a pass. None of the saved runs was affected: all 20 live passes on that scenario ended with `finish_tool`.
 
 ## Cost and execution bounds
 
@@ -134,9 +136,11 @@ The plan is the proxy's plan plus a `task`, and optionally a `system` prompt:
 }
 ```
 
-Each trial replaces `{{run}}` with a fresh id. The server keeps what earlier trials wrote, so without it a later trial would count their leftovers, and the command refuses more than one trial for a plan that doesn't use it. Tool calls reach the real server. Use a test account.
+Each trial replaces `{{run}}` with a fresh id. The server keeps what earlier trials wrote, so without it a later trial could pass on their leftovers. With more than one trial, at least one state check has to count or ask for `{{run}}`, and a plan with only trace checks has to use it in its task. The id in a label alone doesn't count. Tool calls reach the real server. Use a test account.
 
-A trial ends when the model answers without calling a tool, or at `--max-turns`. Then the checks run against the server. A plan can also carry `trace` checks on what the model did, such as how often a write reached the server or whether a read came back before a retry. `packages/mcp/README.md` describes them. A trial fails if a check of either kind fails or if a planned fault never fired. As with the refund scenarios, a refusal or a full context window stops the evaluation and is never scored, and refusal fallbacks stay off so the model under test doesn't change.
+The server is started with your environment, which is usually where its own credentials are, but without `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`. It is someone else's code and has no use for the model key.
+
+A trial ends when the model answers without calling a tool, or at `--max-turns`. Then the checks run against the server. When the model asks for several tools in one turn, they start together, in the order it listed them. It chose them all before seeing any result, so a read in the same turn as a repeated write doesn't count as looking first. A plan can also carry `trace` checks on what the model did, such as how often a write reached the server or whether a read came back before a retry. `packages/mcp/README.md` describes them. A trial fails if a check of either kind fails or if a planned fault never fired. As with the refund scenarios, a refusal or a full context window stops the evaluation and is never scored, and refusal fallbacks stay off so the model under test doesn't change.
 
 The default system prompt says only to complete the task with the tools and report what was done. It gives no hint about retries or duplicates. If the server sends its own instructions, the model sees them after the system prompt, as it would in a real client, and the report records them. `--no-server-instructions` leaves them out. The agent version ends in a hash of the system prompt, those instructions, the task and the server's tool definitions.
 
@@ -144,7 +148,9 @@ The default system prompt says only to complete the task with the tools and repo
 
 A plan's `setup` steps run on the server before every trial and its `cleanup` steps after the checks, also when a trial was cut short. They are plain tool calls, outside the fault plan and the trace. A failed setup stops the run before the model is called. A failed cleanup stops it after the trial, because the next trial would count the leftovers.
 
-`--max-cost DOLLARS` stops the run before a model call once the estimated spend, the judge's included, has reached it. The default is 1. A run that stops this way keeps its finished trials, reports the one in progress as interrupted, and exits 1. A model with no price on file can't have a limit. The default is then dropped with a note, and an explicit limit is refused.
+`--max-cost DOLLARS` stops the run before a model call once the estimated spend, the judge's included, has reached it. The default is 1. A run that stops this way keeps its finished trials, reports the one in progress as interrupted, and exits 1. Once the limit is reached the judge isn't asked either, and that trial's answer is recorded as not reviewed. A model or a judge with no price on file can't have a limit. The default is then dropped with a note, and an explicit limit is refused.
+
+The spend is an estimate from published prices. `claude-haiku-5-5` costs five times as much on a call whose prompt passes 100,000 tokens. A trial with such a call is priced entirely at that higher rate, so the limit errs high. No saved run has had a prompt that long.
 
 Bounds: 1-20 trials, at most 10 model calls per trial by default (`--max-turns` 1-20), 8192 output tokens per call (512-16000), a 120-second request timeout and a 180-second trial deadline. A tool result longer than 20,000 characters is cut, with a line telling the model so, and the report counts those. Reports go to `.faultline/evaluations/mcp-<id>.json` with each trial's trace, checks, tool calls, final answer, token counts and an estimated cost.
 
@@ -186,6 +192,8 @@ What decided each trial was the read tool the model used to look for the issue b
 | None, an immediate retry | 1 | 0 |
 
 `search_issues` doesn't show a new issue straight away. Across the three runs the models searched 26 times after the write had landed, between 0.8 and 4.4 seconds later. Two of those searches returned the new issue. A separate scripted probe, with no model, created an issue and searched for its title repeatedly. In four rounds the search first returned it after 2 to 5 seconds, while `list_issues` returned it within a second every time. Two more rounds were discarded because the search calls returned errors, and the probe didn't keep the full error text.
+
+The probe was repeated on 2026-11-23 over 11 rounds, again with no model. `list_issues` had the new issue in its first call every time. `search_issues` answered its first call in 8 rounds and never had the issue in it. It first showed the issue 2 to 10 seconds after the write. On github.com the server's `search_issues` uses GitHub's semantic search, which is limited to 10 requests a minute. The errors in the first probe were very likely that limit, and three of the 11 rounds were lost to it this time.
 
 In the 14 failed trials that relied on the search, the model's final answer said it had searched first and that the retry had not made, or should not have made, a duplicate. The repository had two issues each time. In the one immediate retry the model noticed the second copy, closed it as a duplicate and said so.
 

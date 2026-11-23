@@ -6,7 +6,7 @@ import { continuePrompt, runToolCall, setUpTrial, taskFor, toolDescriptions, tru
 export type { PromptVariant } from './shared.js';
 export type ModelResponse = Pick<Response, 'id' | 'output' | 'usage' | 'status'> & Partial<Pick<Response, 'incomplete_details'>>;
 export type ModelTransport = (request: ResponseCreateParamsNonStreaming, signal: AbortSignal) => Promise<ModelResponse>;
-// OpenAI strict mode requires every property in `required`, so optional fields are nullable instead.
+// strict mode requires every property, so optional fields are nullable instead
 const toolsFor = (idempotencyKeys: boolean): FunctionTool[] => [
   { type: 'function', name: 'issue_refund', description: toolDescriptions.issue_refund, strict: true,
     parameters: idempotencyKeys
@@ -23,7 +23,7 @@ export function openAITransport(apiKey: string): ModelTransport {
   return async (request, signal) => {
     try { return await client.responses.create(request, { signal }); }
     catch (error) {
-      // Do not persist request headers, provider payloads, or credentials in reports.
+      // plain messages only: no headers, payloads or credentials reach a report
       if (signal.aborted) throw new Error('Model execution deadline exceeded');
       if (error instanceof OpenAI.APIError) throw new Error(`Model request failed (HTTP ${error.status ?? 'unknown'})`);
       throw new Error('Model request could not be completed');
@@ -43,7 +43,7 @@ export function createOpenAIAgent(options: {
     const signal = AbortSignal.timeout(options.timeoutMs ?? 120_000);
     const tools = toolsFor(context.idempotencyKeys);
     const input: ResponseInputItem[] = [{ role: 'user', content: taskFor(context) }];
-    const finish = (reason: string, result: AgentResult = { status: 'escalated' }) => { metadata.stopReason = reason; return result; };
+    const finish = (reason: string, result: AgentResult = { status: 'incomplete' }) => { metadata.stopReason = reason; return result; };
     for (let turn = 0; turn < maxTurns; turn++) {
       signal.throwIfAborted();
       const response = await options.transport({
@@ -55,7 +55,7 @@ export function createOpenAIAgent(options: {
       metadata.inputTokens! += response.usage?.input_tokens ?? 0;
       metadata.outputTokens! += response.usage?.output_tokens ?? 0;
       const calls = response.output.filter(item => item.type === 'function_call');
-      // Hitting our own output cap is agent behavior under test. Any other unfinished status is the provider's and must not be scored as an escalation.
+      // our own output cap is behavior under test; any other unfinished status is the provider's
       const truncated = response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens';
       context.recordModelCall({ responseId: response.id, model: options.model, turn: turn + 1, status: response.status ?? 'unknown', tools: calls.map(call => call.name),
         ...(truncated ? { truncated: true } : {}), ...(!calls.length && !truncated ? { textOnly: true } : {}),
@@ -66,7 +66,7 @@ export function createOpenAIAgent(options: {
       }
       if (calls.length > 1) return finish('unexpected_parallel_tools');
       if (truncated) metadata.truncatedTurns!++;
-      // Preserve reasoning/output items in the conversation, without writing hidden reasoning to traces.
+      // reasoning items stay in the conversation but never reach the trace
       input.push(...response.output as ResponseInputItem[]);
       if (!calls.length) {
         if (!truncated) metadata.textOnlyTurns!++;

@@ -46,11 +46,11 @@ const model = values.model ?? process.env.ANTHROPIC_MODEL;
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!values['accept-costs'] || !apiKey || !model) fail('Live evaluation requires ANTHROPIC_API_KEY, an explicit model, and --accept-costs. No model request was sent.');
 
-// a limit needs a price. Without one the default is dropped with a note, and an explicit limit is refused
-const priced = estimateCost(model!, noUsage()) !== null;
-const maxCostUsd = values['max-cost'] !== undefined ? Number(values['max-cost']) : priced ? 1 : undefined;
+// a limit needs a price for the model and for the judge. Without one the default is dropped with a note, and an explicit limit is refused
+const unpriced = [model!, ...(values.judge ? [values.judge] : [])].find(name => estimateCost(name, noUsage()) === null);
+const maxCostUsd = values['max-cost'] !== undefined ? Number(values['max-cost']) : unpriced ? undefined : 1;
 if (maxCostUsd !== undefined && !(Number.isFinite(maxCostUsd) && maxCostUsd > 0)) fail('max-cost must be a number of dollars above 0');
-if (maxCostUsd !== undefined && !priced) fail(`There is no price on file for ${model}, so --max-cost can't be enforced. No model request was sent.`);
+if (maxCostUsd !== undefined && unpriced) fail(`There is no price on file for ${unpriced}, so --max-cost can't be enforced. No model request was sent.`);
 
 let plan: unknown;
 try {
@@ -60,13 +60,14 @@ try {
   fail(`Could not use ${values.plan}: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-const upstream = await connectUpstream(command!, args);
+// the server under test is someone else's code. it gets the rest of the environment, where its own credentials usually are, but not the model key
+const upstream = await connectUpstream(command!, args, { without: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] });
 const id = randomUUID();
 const startedAt = new Date().toISOString();
 const dollars = (cost: number | null) => cost === null ? 'no price on file' : `$${cost.toFixed(4)}`;
 console.log(`MCP evaluation: ${trials} trial(s) of ${model}, at most ${trials * maxTurns} model calls${values.judge ? ` plus ${trials} by the judge ${values.judge}` : ''}. Tool calls reach the real server, so use a test account.`);
 if (values.judge === model) console.log('Note: the judge is the model under test. A different model is a more independent reader.');
-console.log(maxCostUsd === undefined ? `No price on file for ${model}, so no cost limit applies.` : `Cost limit: $${maxCostUsd}.`);
+console.log(maxCostUsd === undefined ? `No price on file for ${unpriced}, so no cost limit applies.` : `Cost limit: $${maxCostUsd}.`);
 try {
   // thinking on a long tool list can take longer than the refund scenarios' 30 seconds
   const transport = anthropicTransport(apiKey!, 120_000);

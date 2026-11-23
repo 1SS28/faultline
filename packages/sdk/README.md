@@ -6,7 +6,7 @@ Adds Faultline's faults to the tools your own AI agent calls. Wrap a tool functi
 npm install --save-dev faultline-sdk
 ```
 
-It has no dependencies and runs on Node.js 18 or newer. Until it's published, build it with `npm run build:sdk` from the repository root, or import `packages/sdk/src/index.ts` directly.
+It has no dependencies and runs on Node.js 18 or newer.
 
 ## Example
 
@@ -41,13 +41,14 @@ FAILED
   05  +0ms  send_email ran against the service
   06  +0ms  send_email returned
   ✗ Customer gets exactly one email: 2 (expected 1)
+  ✓ Every planned fault fired
 ```
 
 The repository's `tests/sdk.test.ts` contains this example in full, with a version of the agent that passes.
 
 ## Faults
 
-Each fault applies to the listed call numbers of one tool, counting from 1. The default is the first call.
+Each fault applies to the listed call numbers of one tool, counting from 1. The default is the first call. Only one fault can apply to a call, so `lab.tool` throws if two share one.
 
 | Fault | What happens | What a good agent does |
 |---|---|---|
@@ -55,6 +56,8 @@ Each fault applies to the listed call numbers of one tool, counting from 1. The 
 | `faults.timeoutBeforeCommit()` | The call fails before your function runs. | Retries. Giving up here is a missed task. |
 | `faults.rateLimit({ retryAfterMs })` | Every call is rejected until the window passes. | Waits, then retries. |
 | `faults.malformedResponse({ replaceWith })` | Your function runs, but the caller gets a different result. The default is `{}`. | Doesn't report success without a confirmation. |
+
+If your own function throws, the error reaches the agent unchanged and the trace records it. A fault planned for that call doesn't fire.
 
 Faults throw `ToolFailure` by default, with `code` set to `TIMEOUT` or `RATE_LIMIT` and `retryAfterMs` on rate limits. To test the error handling your agent really has, pass the error your client throws: `faults.timeoutAfterCommit({ error: () => new MyHttpTimeout() })`.
 
@@ -64,11 +67,16 @@ lab.tool('charge_card', payments.charge.bind(payments), faults.timeoutAfterCommi
 
 ## Checks
 
-Base checks on your service's own records, such as rows in a test database or a fake's outbox, not on what the agent says it did. `lab.ran('send_email')` tells you how many times your function was actually reached. A lab with no checks fails, so a test can't pass by accident.
+Base checks on your service's own records, such as rows in a test database or a fake's outbox, not on what the agent says it did. `lab.ran('send_email')` tells you how many times your function was actually reached.
+
+Two rules stop a test from passing by accident:
+
+- A lab with no checks fails.
+- A lab whose planned fault never fired fails, with the check "Every planned fault fired". If you plan a fault for the second call and the agent only calls once, nothing was broken, so the result proves nothing. `lab.unfired()` lists those faults. This rule is new in 0.2.0.
 
 ## Time
 
-A lab uses a virtual clock by default, so a one-second backoff costs no real time. For that to work, the agent's waits must go through `lab.wait(ms)`. If your agent sleeps on its own, use `createLab({ clock: realClock })`.
+A lab uses a virtual clock by default, so a one-second backoff costs no real time. For that to work, the agent's waits must go through `lab.wait(ms)`, which throws if `ms` isn't a number, 0 or more. If your agent sleeps on its own, use `createLab({ clock: realClock })`.
 
 ## Model-driven agents
 
